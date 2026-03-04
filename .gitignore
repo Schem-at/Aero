@@ -1,0 +1,28 @@
+# Go
+bin/
+vendor/
+
+# Rust
+server/target/
+server/pkg/
+
+# Node / Bun
+web/node_modules/
+web/.bun/
+
+# WASM build output (generated)
+web/public/wasm/
+
+# Vite build output
+web/dist/
+
+# Certificates (generated)
+proxy/certs/
+
+# General
+.DS_Store
+*.log
+.env
+web/.env.local
+.history/
+.vscode/
