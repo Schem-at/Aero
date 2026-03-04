@@ -1,14 +1,16 @@
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { ServerConsole } from "@/components/ServerConsole";
+import { ChatPanel } from "@/components/ChatPanel";
 import { PacketInspector } from "@/components/PacketInspector";
 import { StatsPanel } from "@/components/StatsPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
 
-type Tab = "console" | "packets" | "stats" | "settings";
+type Tab = "console" | "chat" | "packets" | "stats" | "settings";
 
 const tabs: { id: Tab; label: string }[] = [
   { id: "console", label: "Console" },
+  { id: "chat", label: "Chat" },
   { id: "packets", label: "Packets" },
   { id: "stats", label: "Stats" },
   { id: "settings", label: "Settings" },
@@ -36,6 +38,7 @@ export function DevTools() {
       </div>
       <div className="flex-1 min-h-0">
         {active === "console" && <ServerConsole />}
+        {active === "chat" && <ChatPanel />}
         {active === "packets" && <PacketInspector />}
         {active === "stats" && <StatsPanel />}
         {active === "settings" && <SettingsPanel />}

@@ -30,6 +30,7 @@ pub enum LogCategory {
     Wasm,
     Login,
     Encryption,
+    Chat,
 }
 
 impl fmt::Display for LogCategory {
@@ -44,6 +45,7 @@ impl fmt::Display for LogCategory {
             LogCategory::Wasm => write!(f, "wasm"),
             LogCategory::Login => write!(f, "login"),
             LogCategory::Encryption => write!(f, "encryption"),
+            LogCategory::Chat => write!(f, "chat"),
         }
     }
 }

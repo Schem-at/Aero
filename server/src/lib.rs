@@ -71,6 +71,20 @@ mod wasm_exports {
         CONNECTION.with(|c| c.borrow_mut().complete_auth(response))
     }
 
+    /// Queue a chat message to be sent to the Minecraft client.
+    #[wasm_bindgen]
+    pub fn queue_chat(message: &str) {
+        CONNECTION.with(|c| {
+            let mut conn = c.borrow_mut();
+            conn.log(
+                crate::logging::LogLevel::Info,
+                crate::logging::LogCategory::Chat,
+                &format!("[Server] {}", message),
+            );
+            conn.chat_queue.push(message.to_string());
+        });
+    }
+
     /// Update server configuration (MOTD, max players, etc.) from JSON.
     #[wasm_bindgen]
     pub fn set_server_config(json: &str) {

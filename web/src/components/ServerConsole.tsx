@@ -24,6 +24,7 @@ const categoryColors: Record<LogCategory, string> = {
   wasm: "text-emerald-400",
   login: "text-orange-400",
   encryption: "text-rose-400",
+  chat: "text-green-400",
 };
 
 function formatTime(date: Date): string {

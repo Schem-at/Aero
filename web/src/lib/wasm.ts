@@ -83,6 +83,11 @@ export function completeAuth(mojangResponse: string): Uint8Array {
   return new Uint8Array(result);
 }
 
+export function queueChat(message: string): void {
+  if (!wasmModule) return;
+  (wasmModule as any).queue_chat(message);
+}
+
 export function setServerConfig(config: {
   motd: string;
   max_players: number;

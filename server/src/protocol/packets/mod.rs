@@ -17,3 +17,5 @@ pub mod client_settings_play;
 pub mod keep_alive;
 pub mod tick_end;
 pub mod play_ignore;
+pub mod chat_message;
+pub mod chat_command;

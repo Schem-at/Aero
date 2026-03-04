@@ -173,6 +173,18 @@ impl PacketRegistry {
         reg.register(ConnectionState::Play, 0x2A,
             Box::new(play_ignore::SilentHandler { name: "Arm Animation" }));
 
+        // Chat packets
+        reg.register(
+            ConnectionState::Play,
+            0x08,
+            Box::new(chat_message::ChatMessageHandler),
+        );
+        reg.register(
+            ConnectionState::Play,
+            0x06,
+            Box::new(chat_command::ChatCommandHandler),
+        );
+
         reg
     }
 }

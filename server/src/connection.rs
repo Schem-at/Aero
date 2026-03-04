@@ -53,6 +53,7 @@ pub struct Connection {
     last_keep_alive_ms: f64,
     tick_tracker: TickTracker,
     pub server_config: ServerConfig,
+    pub chat_queue: Vec<String>,
     logger: Box<dyn Logger>,
     registry: PacketRegistry,
 }
@@ -71,6 +72,7 @@ impl Connection {
             last_keep_alive_ms: 0.0,
             tick_tracker: TickTracker::new(),
             server_config: ServerConfig::default(),
+            chat_queue: Vec::new(),
             logger,
             registry: PacketRegistry::default_registry(),
         }
@@ -85,6 +87,7 @@ impl Connection {
         self.compression_threshold = None;
         self.last_keep_alive_ms = 0.0;
         self.tick_tracker.reset();
+        self.chat_queue.clear();
         self.stats.player_count = 0;
         self.stats.connected_at_ms = 0.0;
         self.log(LogLevel::Debug, LogCategory::System, "Connection state reset to Handshaking");
@@ -96,6 +99,22 @@ impl Connection {
 
     pub fn logger(&self) -> &dyn Logger {
         &*self.logger
+    }
+
+    /// Build a System Chat Message packet (S→C 0x77).
+    /// Text component is encoded as NBT (protocol 764+): bare TAG_String for plain text.
+    fn build_system_chat(&self, message: &str) -> Vec<u8> {
+        let bytes = message.as_bytes();
+        let mut payload = Vec::with_capacity(1 + 2 + bytes.len() + 1);
+        payload.push(0x08); // TAG_String type byte (raw NBT tag, no name)
+        payload.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+        payload.extend_from_slice(bytes);
+        payload.push(0); // overlay = false (shows in chat, not action bar)
+        if let Some(threshold) = self.compression_threshold {
+            compress_packet(0x77, &payload, threshold)
+        } else {
+            frame_packet(0x77, &payload)
+        }
     }
 
     pub fn handle_packet(&mut self, data: &[u8]) -> Vec<u8> {
@@ -231,6 +250,13 @@ impl Connection {
                     let ka_packet = compress_packet(0x2B, &keep_alive_id.to_be_bytes(), threshold);
                     response.extend_from_slice(&ka_packet);
                 }
+            }
+
+            // Drain chat queue — send queued messages as System Chat packets
+            let messages: Vec<String> = self.chat_queue.drain(..).collect();
+            for msg in messages {
+                let chat_packet = self.build_system_chat(&msg);
+                response.extend_from_slice(&chat_packet);
             }
         }
 

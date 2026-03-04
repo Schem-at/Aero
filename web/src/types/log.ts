@@ -9,7 +9,8 @@ export type LogCategory =
   | "transport"
   | "wasm"
   | "login"
-  | "encryption";
+  | "encryption"
+  | "chat";
 
 export interface LogEntry {
   id: number;
