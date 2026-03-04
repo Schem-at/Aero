@@ -1,10 +1,43 @@
-/// Builds all Play state initialization packets for spawning a player
-/// on a 16x16 red concrete platform at Y=64.
+/// Builds Play state initialization packets for spawning a player.
+/// Provides both monolithic (build_play_packets) and split APIs for worker-based chunk generation.
 
 use crate::compression::compress_packet;
 use crate::protocol::types::{write_string, write_varint};
+use std::collections::HashMap;
+
+/// Build the init packets sent before chunks: Login Play, Game Event, Set Spawn, View Position, Chunk Batch Start.
+pub fn build_play_init(entity_id: i32, threshold: i32) -> Vec<u8> {
+    let mut result = Vec::new();
+    result.extend_from_slice(&compress_packet(0x30, &build_login_play(entity_id), threshold));
+    result.extend_from_slice(&compress_packet(0x26, &build_game_event(13, 0.0), threshold));
+    result.extend_from_slice(&compress_packet(0x5F, &build_set_default_spawn(), threshold));
+    result.extend_from_slice(&compress_packet(0x5C, &build_update_view_position(), threshold));
+    result.extend_from_slice(&compress_packet(0x0C, &[], threshold));
+    result
+}
+
+/// Build a single Chunk Data packet from a flat block state array.
+/// `block_states` has 98304 entries (16×384×16), indexed `y_offset * 256 + z * 16 + x`
+/// where y_offset ranges 0..384 (corresponding to Y=-64..+319).
+pub fn build_chunk_from_blocks(cx: i32, cz: i32, block_states: &[u16], threshold: i32) -> Vec<u8> {
+    compress_packet(0x2C, &build_chunk_data_from_blocks(cx, cz, block_states), threshold)
+}
+
+/// Build finish packets: Chunk Batch Finished + Synchronize Player Position (initial spawn only).
+pub fn build_play_finish(chunk_count: i32, threshold: i32) -> Vec<u8> {
+    let mut result = Vec::new();
+    result.extend_from_slice(&compress_packet(0x0B, &build_chunk_batch_finished(chunk_count), threshold));
+    result.extend_from_slice(&compress_packet(0x46, &build_sync_player_position(), threshold));
+    result
+}
+
+/// Build just the Chunk Batch Finished packet (for ongoing chunk loading, no teleport).
+pub fn build_chunk_batch_end(chunk_count: i32, threshold: i32) -> Vec<u8> {
+    compress_packet(0x0B, &build_chunk_batch_finished(chunk_count), threshold)
+}
 
 /// Build all Play initialization packets as concatenated compressed bytes.
+/// (Legacy monolithic API — kept for tests and backward compat)
 pub fn build_play_packets(entity_id: i32, threshold: i32) -> Vec<u8> {
     let mut result = Vec::new();
 
@@ -59,9 +92,9 @@ fn build_login_play(entity_id: i32) -> Vec<u8> {
     // Max Players (VarInt)
     p.extend_from_slice(&write_varint(20));
     // View Distance (VarInt)
-    p.extend_from_slice(&write_varint(2));
+    p.extend_from_slice(&write_varint(10));
     // Simulation Distance (VarInt)
-    p.extend_from_slice(&write_varint(2));
+    p.extend_from_slice(&write_varint(10));
     // Reduced Debug Info (bool)
     p.push(0);
     // Enable Respawn Screen (bool)
@@ -149,6 +182,189 @@ fn build_chunk_data_at(cx: i32, cz: i32, has_platform: bool) -> Vec<u8> {
 
     // Light data
     p.extend_from_slice(&build_light_data());
+
+    p
+}
+
+/// Build a full chunk data payload from a flat block state array (98304 entries).
+fn build_chunk_data_from_blocks(cx: i32, cz: i32, block_states: &[u16]) -> Vec<u8> {
+    let mut p = Vec::new();
+
+    // Chunk X, Z (i32)
+    p.extend_from_slice(&cx.to_be_bytes());
+    p.extend_from_slice(&cz.to_be_bytes());
+
+    // Compute heightmaps by scanning for highest non-air block per column
+    let mut heights = [0u64; 256]; // 16x16
+    for x in 0..16usize {
+        for z in 0..16usize {
+            let col_idx = z * 16 + x;
+            for y_off in (0..384usize).rev() {
+                let idx = y_off * 256 + col_idx;
+                if idx < block_states.len() && block_states[idx] != 0 {
+                    // Heightmap value = y+1 from world bottom (-64), so y_off+1
+                    heights[col_idx] = (y_off + 1) as u64;
+                    break;
+                }
+            }
+        }
+    }
+    p.extend_from_slice(&build_heightmaps_from_values(&heights));
+
+    // Build chunk sections
+    let mut section_data = Vec::new();
+    for section_idx in 0..24usize {
+        let y_start = section_idx * 16;
+        section_data.extend_from_slice(&build_section_from_blocks(block_states, y_start));
+    }
+    p.extend_from_slice(&write_varint(section_data.len() as i32));
+    p.extend_from_slice(&section_data);
+
+    // Block entities: count = 0
+    p.extend_from_slice(&write_varint(0));
+
+    // Light data
+    p.extend_from_slice(&build_light_data());
+
+    p
+}
+
+/// Build a single chunk section from the block state array.
+/// `y_start` is the y-offset (0-based) of the first block in this section.
+fn build_section_from_blocks(block_states: &[u16], y_start: usize) -> Vec<u8> {
+    let mut s = Vec::new();
+
+    // Extract 4096 block states for this section
+    let mut section_blocks = [0u16; 4096];
+    let mut non_air = 0u16;
+    for y in 0..16usize {
+        for z in 0..16usize {
+            for x in 0..16usize {
+                let src_idx = (y_start + y) * 256 + z * 16 + x;
+                let dst_idx = y * 256 + z * 16 + x;
+                let block = if src_idx < block_states.len() { block_states[src_idx] } else { 0 };
+                section_blocks[dst_idx] = block;
+                if block != 0 {
+                    non_air += 1;
+                }
+            }
+        }
+    }
+
+    // Block count
+    s.extend_from_slice(&non_air.to_be_bytes());
+
+    // Build palette: unique block state IDs
+    let mut palette_map: HashMap<u16, usize> = HashMap::new();
+    let mut palette_list: Vec<u16> = Vec::new();
+    for &block in &section_blocks {
+        if !palette_map.contains_key(&block) {
+            palette_map.insert(block, palette_list.len());
+            palette_list.push(block);
+        }
+    }
+
+    let unique_count = palette_list.len();
+
+    if unique_count == 1 {
+        // Single-value palette (bpe=0)
+        s.push(0);
+        s.extend_from_slice(&write_varint(palette_list[0] as i32));
+    } else {
+        // Choose bits_per_entry: minimum 4 for indirect palette
+        let bpe = if unique_count <= 16 {
+            4u8
+        } else if unique_count <= 256 {
+            8u8
+        } else {
+            15u8 // direct palette
+        };
+
+        if bpe == 15 {
+            // Direct palette: no palette list, block state IDs stored directly
+            s.push(15);
+            // Pack section_blocks directly at 15 bpe
+            let entries_per_long = 64 / bpe as usize;
+            let num_longs = (4096 + entries_per_long - 1) / entries_per_long;
+            for i in 0..num_longs {
+                let mut long_val: u64 = 0;
+                for j in 0..entries_per_long {
+                    let idx = i * entries_per_long + j;
+                    if idx < 4096 {
+                        long_val |= (section_blocks[idx] as u64) << (j * bpe as usize);
+                    }
+                }
+                s.extend_from_slice(&(long_val as i64).to_be_bytes());
+            }
+        } else {
+            // Indirect palette
+            s.push(bpe);
+            s.extend_from_slice(&write_varint(palette_list.len() as i32));
+            for &id in &palette_list {
+                s.extend_from_slice(&write_varint(id as i32));
+            }
+
+            let entries_per_long = 64 / bpe as usize;
+            let num_longs = (4096 + entries_per_long - 1) / entries_per_long;
+            // No data array length VarInt — removed in 1.21.5+ (protocol 770+)
+            for i in 0..num_longs {
+                let mut long_val: u64 = 0;
+                for j in 0..entries_per_long {
+                    let idx = i * entries_per_long + j;
+                    if idx < 4096 {
+                        let palette_idx = palette_map[&section_blocks[idx]] as u64;
+                        long_val |= palette_idx << (j * bpe as usize);
+                    }
+                }
+                s.extend_from_slice(&(long_val as i64).to_be_bytes());
+            }
+        }
+    }
+
+    // Biome palette: single-valued (bpe=0), palette=0 (plains)
+    s.push(0);
+    s.extend_from_slice(&write_varint(0));
+    // No data array length
+
+    s
+}
+
+/// Build heightmaps from per-column height values (256 entries).
+fn build_heightmaps_from_values(heights: &[u64; 256]) -> Vec<u8> {
+    let bits_per_entry = 9;
+    let entries_per_long = 64 / bits_per_entry; // 7
+    let num_longs = (256 + entries_per_long - 1) / entries_per_long; // 37
+    let mask = (1u64 << bits_per_entry) - 1;
+
+    let mut longs = Vec::with_capacity(num_longs);
+    let mut idx = 0;
+    for _ in 0..num_longs {
+        let mut long_val: u64 = 0;
+        for j in 0..entries_per_long {
+            if idx < 256 {
+                long_val |= (heights[idx] & mask) << (j * bits_per_entry);
+                idx += 1;
+            }
+        }
+        longs.push(long_val as i64);
+    }
+
+    let mut p = Vec::new();
+    p.extend_from_slice(&write_varint(2)); // 2 heightmap entries
+
+    // WORLD_SURFACE (type=1)
+    p.extend_from_slice(&write_varint(1));
+    p.extend_from_slice(&write_varint(longs.len() as i32));
+    for &val in &longs {
+        p.extend_from_slice(&val.to_be_bytes());
+    }
+
+    // MOTION_BLOCKING (type=4)
+    p.extend_from_slice(&write_varint(4));
+    p.extend_from_slice(&write_varint(longs.len() as i32));
+    for &val in &longs {
+        p.extend_from_slice(&val.to_be_bytes());
+    }
 
     p
 }
@@ -382,5 +598,54 @@ mod tests {
         let packets = build_play_packets(1, 256);
         // Should produce a substantial amount of data (compressed)
         assert!(packets.len() > 100, "Got {} bytes", packets.len());
+    }
+
+    #[test]
+    fn test_build_play_init_produces_bytes() {
+        let packets = build_play_init(1, 256);
+        assert!(packets.len() > 50, "Got {} bytes", packets.len());
+    }
+
+    #[test]
+    fn test_build_play_finish_produces_bytes() {
+        let packets = build_play_finish(25, 256);
+        assert!(packets.len() > 10, "Got {} bytes", packets.len());
+    }
+
+    #[test]
+    fn test_build_chunk_from_blocks_empty() {
+        // All-air chunk
+        let block_states = vec![0u16; 98304];
+        let chunk = build_chunk_from_blocks(0, 0, &block_states, 256);
+        assert!(chunk.len() > 50, "Got {} bytes", chunk.len());
+    }
+
+    #[test]
+    fn test_build_chunk_from_blocks_with_platform() {
+        // Flat world: stone Y=0..2, dirt Y=2..3, grass Y=3..4, air above
+        let mut block_states = vec![0u16; 98304];
+        let stone = 1u16;
+        let dirt = 10u16;
+        let grass = 9u16;
+        // y_offset 0..64 is Y=-64..0, y_offset 64 is Y=0
+        // Place platform at y_offset=128 (Y=64)
+        for z in 0..16 {
+            for x in 0..16 {
+                block_states[128 * 256 + z * 16 + x] = stone;
+                block_states[129 * 256 + z * 16 + x] = dirt;
+                block_states[130 * 256 + z * 16 + x] = grass;
+            }
+        }
+        let chunk = build_chunk_from_blocks(0, 0, &block_states, 256);
+        assert!(chunk.len() > 100, "Got {} bytes", chunk.len());
+    }
+
+    #[test]
+    fn test_section_single_value_optimization() {
+        // All-air section should produce a small section
+        let block_states = vec![0u16; 98304];
+        let section = build_section_from_blocks(&block_states, 0);
+        // Single-value: 2 (block_count) + 1 (bpe=0) + 1 (palette) + 1 (biome_bpe) + 1 (biome_palette) = 6
+        assert_eq!(section.len(), 6);
     }
 }

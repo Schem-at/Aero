@@ -3,7 +3,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { useLogs } from "@/context/LogContext";
 import { useServer } from "@/context/ServerContext";
-import { queueChat } from "@/lib/wasm";
+import { useWorker } from "@/context/WorkerContext";
 
 function formatTime(date: Date): string {
   return date.toLocaleTimeString("en-US", {
@@ -17,6 +17,7 @@ function formatTime(date: Date): string {
 export function ChatPanel() {
   const { logs } = useLogs();
   const { status } = useServer();
+  const { queueChat } = useWorker();
   const [message, setMessage] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -35,7 +36,7 @@ export function ChatPanel() {
     if (!trimmed || !isRunning) return;
     queueChat(trimmed);
     setMessage("");
-  }, [message, isRunning]);
+  }, [message, isRunning, queueChat]);
 
   return (
     <div className="flex flex-col h-full">

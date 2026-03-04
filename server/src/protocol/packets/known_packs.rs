@@ -22,14 +22,21 @@ impl PacketHandler for KnownPacksHandler {
         ctx.log(LogLevel::Info, LogCategory::Protocol, "Sending registry data...");
         response.extend_from_slice(&build_all_registry_packets(threshold));
 
-        // 2. Send Feature Flags (0x0C)
+        // 2. Send server brand via Plugin Message (0x01)
+        let mut brand_payload = Vec::new();
+        brand_payload.extend_from_slice(&write_string("minecraft:brand"));
+        brand_payload.extend_from_slice(&write_string("Aero"));
+        response.extend_from_slice(&compress_packet(0x01, &brand_payload, threshold));
+        ctx.log(LogLevel::Info, LogCategory::Protocol, "Sent server brand: Aero");
+
+        // 3. Send Feature Flags (0x0C)
         let mut feature_flags_payload = Vec::new();
         feature_flags_payload.extend_from_slice(&write_varint(1)); // 1 feature flag
         feature_flags_payload.extend_from_slice(&write_string("minecraft:vanilla"));
         response.extend_from_slice(&compress_packet(0x0C, &feature_flags_payload, threshold));
         ctx.log(LogLevel::Info, LogCategory::Protocol, "Sent Feature Flags: minecraft:vanilla");
 
-        // 3. Send Finish Configuration (0x03)
+        // 4. Send Finish Configuration (0x03)
         response.extend_from_slice(&compress_packet(0x03, &[], threshold));
         ctx.log(LogLevel::Info, LogCategory::Protocol, "Sent Finish Configuration");
 

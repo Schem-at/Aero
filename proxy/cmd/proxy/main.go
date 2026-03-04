@@ -10,6 +10,9 @@ import (
 	"sync"
 	"syscall"
 
+	"net/http"
+
+	"github.com/user/minecraft-web/proxy/internal/metrics"
 	"github.com/user/minecraft-web/proxy/internal/router"
 	"github.com/user/minecraft-web/proxy/internal/tcp"
 	"github.com/user/minecraft-web/proxy/internal/transport"
@@ -18,6 +21,7 @@ import (
 func main() {
 	port := flag.Int("port", 25565, "TCP listen port for Minecraft clients")
 	wtPort := flag.Int("wt-port", 4433, "WebTransport listen port")
+	apiPort := flag.Int("api-port", 9090, "HTTP API port for metrics")
 	domain := flag.String("domain", "localhost", "Base domain for subdomain routing")
 	cert := flag.String("cert", "certs/cert.pem", "TLS certificate file")
 	key := flag.String("key", "certs/key.pem", "TLS private key file")
@@ -45,6 +49,18 @@ func main() {
 		Domain: *domain,
 		Router: r,
 	}
+
+	// Metrics HTTP API server
+	apiServer := &http.Server{
+		Addr:    fmt.Sprintf(":%d", *apiPort),
+		Handler: metrics.Handler(),
+	}
+	go func() {
+		log.Printf("api: listening on %s", apiServer.Addr)
+		if err := apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("api: %v", err)
+		}
+	}()
 
 	var wg sync.WaitGroup
 
@@ -77,6 +93,7 @@ func main() {
 	}
 
 	cancel()
+	apiServer.Close()
 	wg.Wait()
 	log.Println("proxy stopped")
 }

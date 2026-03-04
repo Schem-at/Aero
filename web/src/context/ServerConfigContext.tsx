@@ -2,11 +2,9 @@ import {
   createContext,
   useContext,
   useState,
-  useEffect,
   useCallback,
   type ReactNode,
 } from "react";
-import { setServerConfig as setWasmConfig } from "@/lib/wasm";
 
 export interface ServerConfig {
   motd: string;
@@ -48,11 +46,6 @@ const ServerConfigContext = createContext<ServerConfigContextValue | null>(null)
 
 export function ServerConfigProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<ServerConfig>(loadConfig);
-
-  // Push to WASM whenever config changes
-  useEffect(() => {
-    setWasmConfig(config);
-  }, [config]);
 
   const updateConfig = useCallback((partial: Partial<ServerConfig>) => {
     setConfig((prev) => {

@@ -54,6 +54,10 @@ pub struct Connection {
     tick_tracker: TickTracker,
     pub server_config: ServerConfig,
     pub chat_queue: Vec<String>,
+    pub awaiting_chunks: bool,
+    pub player_chunk_x: i32,
+    pub player_chunk_z: i32,
+    pub pending_chunk_center: Option<(i32, i32)>,
     logger: Box<dyn Logger>,
     registry: PacketRegistry,
 }
@@ -73,6 +77,10 @@ impl Connection {
             tick_tracker: TickTracker::new(),
             server_config: ServerConfig::default(),
             chat_queue: Vec::new(),
+            awaiting_chunks: false,
+            player_chunk_x: 0,
+            player_chunk_z: 0,
+            pending_chunk_center: None,
             logger,
             registry: PacketRegistry::default_registry(),
         }
@@ -88,6 +96,10 @@ impl Connection {
         self.last_keep_alive_ms = 0.0;
         self.tick_tracker.reset();
         self.chat_queue.clear();
+        self.awaiting_chunks = false;
+        self.player_chunk_x = 0;
+        self.player_chunk_z = 0;
+        self.pending_chunk_center = None;
         self.stats.player_count = 0;
         self.stats.connected_at_ms = 0.0;
         self.log(LogLevel::Debug, LogCategory::System, "Connection state reset to Handshaking");
@@ -174,6 +186,10 @@ impl Connection {
                 cipher: &mut self.cipher,
                 compression_threshold: &self.compression_threshold,
                 server_config: &self.server_config,
+                awaiting_chunks: &mut self.awaiting_chunks,
+                player_chunk_x: &mut self.player_chunk_x,
+                player_chunk_z: &mut self.player_chunk_z,
+                pending_chunk_center: &mut self.pending_chunk_center,
             };
 
             let result = handler.handle(&payload, &mut ctx);

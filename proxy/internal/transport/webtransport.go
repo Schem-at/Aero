@@ -12,6 +12,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 
+	"github.com/user/minecraft-web/proxy/internal/metrics"
 	"github.com/user/minecraft-web/proxy/internal/router"
 )
 
@@ -105,7 +106,11 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 	log.Printf("wt: session registered for room %q", reg.Room)
 
 	s.Router.Register(reg.Room, &router.Session{WT: session})
-	defer s.Router.Remove(reg.Room)
+	metrics.Get().RoomRegistered(reg.Room)
+	defer func() {
+		s.Router.Remove(reg.Room)
+		metrics.Get().RoomRemoved(reg.Room)
+	}()
 
 	// Send confirmation back on control stream
 	json.NewEncoder(stream).Encode(map[string]string{"status": "ok", "room": reg.Room})

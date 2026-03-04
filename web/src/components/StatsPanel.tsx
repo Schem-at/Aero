@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { useStats } from "@/context/StatsContext";
+import { usePlugins } from "@/context/PluginContext";
 import { Card } from "@/components/ui/card";
 import {
   ArrowDownToLine,
@@ -7,6 +8,9 @@ import {
   Layers,
   Gauge,
   Timer,
+  Box,
+  Clock,
+  Cpu,
 } from "lucide-react";
 
 function formatBytes(bytes: number): string {
@@ -35,6 +39,7 @@ function msptColor(mspt: number): string {
 
 export function StatsPanel() {
   const { stats, history } = useStats();
+  const { worldGenStats, activeGenerator } = usePlugins();
 
   if (!stats) {
     return (
@@ -82,6 +87,36 @@ export function StatsPanel() {
           value={packetTypes.length.toString()}
           icon={<Layers className="h-3.5 w-3.5" />}
         />
+      </div>
+
+      {/* World Generation Stats */}
+      <div>
+        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+          World Generation — {activeGenerator.name}
+        </h3>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatCard
+            label="Chunks Generated"
+            value={worldGenStats.chunksGenerated.toString()}
+            icon={<Box className="h-3.5 w-3.5" />}
+          />
+          <StatCard
+            label="Queue"
+            value={worldGenStats.pendingChunks.toString()}
+            icon={<Layers className="h-3.5 w-3.5" />}
+            valueColor={worldGenStats.pendingChunks > 100 ? "text-yellow-400" : worldGenStats.pendingChunks > 0 ? "text-blue-400" : undefined}
+          />
+          <StatCard
+            label="Avg Chunk Time"
+            value={worldGenStats.chunksGenerated > 0 ? `${worldGenStats.avgChunkTimeMs.toFixed(2)}ms` : "—"}
+            icon={<Clock className="h-3.5 w-3.5" />}
+          />
+          <StatCard
+            label="Last Batch"
+            value={worldGenStats.lastBatchSize > 0 ? `${worldGenStats.lastBatchSize} in ${worldGenStats.lastBatchTimeMs.toFixed(0)}ms` : "—"}
+            icon={<Cpu className="h-3.5 w-3.5" />}
+          />
+        </div>
       </div>
 
       {history.length > 1 && (

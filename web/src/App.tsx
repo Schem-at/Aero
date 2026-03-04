@@ -2,6 +2,8 @@ import { LogProvider } from "@/context/LogContext";
 import { ServerProvider } from "@/context/ServerContext";
 import { StatsProvider } from "@/context/StatsContext";
 import { ServerConfigProvider } from "@/context/ServerConfigContext";
+import { PluginProvider } from "@/context/PluginContext";
+import { WorkerProvider } from "@/context/WorkerContext";
 import { StatusBar } from "@/components/StatusBar";
 import { ServerControls } from "@/components/ServerControls";
 import { DevTools } from "@/components/DevTools";
@@ -12,18 +14,22 @@ export function App() {
       <LogProvider>
         <StatsProvider>
           <ServerConfigProvider>
-            <div className="flex flex-col h-screen p-4 gap-4 max-w-4xl mx-auto">
-              <header className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <h1 className="text-xl font-bold tracking-tight">
-                    Minecraft Web Server
-                  </h1>
-                  <StatusBar />
+            <PluginProvider>
+              <WorkerProvider>
+                <div className="flex flex-col h-screen p-4 gap-4 max-w-4xl mx-auto">
+                  <header className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <h1 className="text-xl font-bold tracking-tight">
+                        Minecraft Web Server
+                      </h1>
+                      <StatusBar />
+                    </div>
+                    <ServerControls />
+                  </header>
+                  <DevTools />
                 </div>
-                <ServerControls />
-              </header>
-              <DevTools />
-            </div>
+              </WorkerProvider>
+            </PluginProvider>
           </ServerConfigProvider>
         </StatsProvider>
       </LogProvider>

@@ -1,8 +1,8 @@
-use minecraft_web_server::connection::Connection;
-use minecraft_web_server::logging::TestLogger;
-use minecraft_web_server::connection::ConnectionState;
-use minecraft_web_server::protocol::types::{write_varint, write_string};
-use minecraft_web_server::protocol::packet::frame_packet;
+use aero_server::connection::Connection;
+use aero_server::logging::TestLogger;
+use aero_server::connection::ConnectionState;
+use aero_server::protocol::types::{write_varint, write_string};
+use aero_server::protocol::packet::frame_packet;
 use std::sync::Arc;
 
 fn build_handshake_packet() -> Vec<u8> {
@@ -32,11 +32,11 @@ fn make_test_connection() -> (Connection, Arc<TestLogger>) {
 // Wrapper to use Arc<TestLogger> as Box<dyn Logger>
 struct TestLoggerWrapper(Arc<TestLogger>);
 
-impl minecraft_web_server::logging::Logger for TestLoggerWrapper {
+impl aero_server::logging::Logger for TestLoggerWrapper {
     fn log(
         &self,
-        level: minecraft_web_server::logging::LogLevel,
-        category: minecraft_web_server::logging::LogCategory,
+        level: aero_server::logging::LogLevel,
+        category: aero_server::logging::LogCategory,
         message: &str,
     ) {
         self.0.log(level, category, message);

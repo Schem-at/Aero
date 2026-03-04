@@ -94,4 +94,111 @@ mod wasm_exports {
             });
         }
     }
+
+    /// Build Play init packets (Login Play, Game Event, Spawn, View Position, Chunk Batch Start).
+    /// Returns encrypted bytes ready for the wire.
+    #[wasm_bindgen]
+    pub fn play_init() -> Vec<u8> {
+        CONNECTION.with(|c| {
+            let mut conn = c.borrow_mut();
+            let threshold = conn.compression_threshold.unwrap_or(256);
+            let data = crate::world::build_play_init(1, threshold);
+            conn.awaiting_chunks = true;
+            if let Some(ref mut cipher) = conn.cipher {
+                let mut encrypted = data;
+                cipher.encrypt(&mut encrypted);
+                encrypted
+            } else {
+                data
+            }
+        })
+    }
+
+    /// Build a single chunk packet from a flat block state array.
+    /// `block_states` is a u16 slice of 98304 entries.
+    /// Returns encrypted bytes ready for the wire.
+    #[wasm_bindgen]
+    pub fn build_chunk(cx: i32, cz: i32, block_states: &[u16]) -> Vec<u8> {
+        CONNECTION.with(|c| {
+            let mut conn = c.borrow_mut();
+            let threshold = conn.compression_threshold.unwrap_or(256);
+            let data = crate::world::build_chunk_from_blocks(cx, cz, block_states, threshold);
+            if let Some(ref mut cipher) = conn.cipher {
+                let mut encrypted = data;
+                cipher.encrypt(&mut encrypted);
+                encrypted
+            } else {
+                data
+            }
+        })
+    }
+
+    /// Build finish packets (Chunk Batch Finished + Sync Player Position for initial spawn).
+    /// Returns encrypted bytes ready for the wire.
+    #[wasm_bindgen]
+    pub fn play_finish(chunk_count: i32) -> Vec<u8> {
+        CONNECTION.with(|c| {
+            let mut conn = c.borrow_mut();
+            let threshold = conn.compression_threshold.unwrap_or(256);
+            let data = crate::world::build_play_finish(chunk_count, threshold);
+            conn.awaiting_chunks = false;
+            if let Some(ref mut cipher) = conn.cipher {
+                let mut encrypted = data;
+                cipher.encrypt(&mut encrypted);
+                encrypted
+            } else {
+                data
+            }
+        })
+    }
+
+    /// Build just Chunk Batch Finished (for ongoing chunk loading — no teleport).
+    /// Returns encrypted bytes ready for the wire.
+    #[wasm_bindgen]
+    pub fn chunk_batch_end(chunk_count: i32) -> Vec<u8> {
+        CONNECTION.with(|c| {
+            let mut conn = c.borrow_mut();
+            let threshold = conn.compression_threshold.unwrap_or(256);
+            let data = crate::world::build_chunk_batch_end(chunk_count, threshold);
+            conn.awaiting_chunks = false;
+            if let Some(ref mut cipher) = conn.cipher {
+                let mut encrypted = data;
+                cipher.encrypt(&mut encrypted);
+                encrypted
+            } else {
+                data
+            }
+        })
+    }
+
+    /// Check if the server is waiting for chunk data from the generator.
+    #[wasm_bindgen]
+    pub fn get_awaiting_chunks() -> bool {
+        CONNECTION.with(|c| c.borrow().awaiting_chunks)
+    }
+
+    /// Clear the awaiting_chunks flag.
+    #[wasm_bindgen]
+    pub fn clear_awaiting_chunks() {
+        CONNECTION.with(|c| c.borrow_mut().awaiting_chunks = false);
+    }
+
+    /// Get the chunk center the player has moved to.
+    /// Returns "cx,cz" if there's a pending center, or empty string if none.
+    #[wasm_bindgen]
+    pub fn get_pending_chunk_center() -> String {
+        CONNECTION.with(|c| {
+            let conn = c.borrow();
+            match conn.pending_chunk_center {
+                Some((cx, cz)) => format!("{},{}", cx, cz),
+                None => String::new(),
+            }
+        })
+    }
+
+    /// Clear the pending chunk center after chunks have been requested.
+    #[wasm_bindgen]
+    pub fn clear_pending_chunk_center() {
+        CONNECTION.with(|c| c.borrow_mut().pending_chunk_center = None);
+    }
 }

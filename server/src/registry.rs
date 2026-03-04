@@ -66,6 +66,8 @@ fn build_biome_registry() -> Vec<u8> {
     nbt.int("water_color", 4159204);
     nbt.int("water_fog_color", 329011);
     nbt.int("sky_color", 7907327);
+    nbt.int("grass_color", 7842607);    // 0x77AB2F — plains grass
+    nbt.int("foliage_color", 4764952);  // 0x48B518 — plains foliage
     nbt.begin_compound("mood_sound");
     nbt.string("sound", "minecraft:ambient.cave");
     nbt.int("tick_delay", 6000);

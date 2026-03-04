@@ -1,4 +1,4 @@
-use minecraft_web_server::protocol::types::{read_varint, write_varint, read_string, write_string};
+use aero_server::protocol::types::{read_varint, write_varint, read_string, write_string};
 
 #[test]
 fn test_varint_roundtrip() {

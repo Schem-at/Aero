@@ -24,6 +24,10 @@ pub struct HandlerContext<'a> {
     pub cipher: &'a mut Option<CipherPair>,
     pub compression_threshold: &'a Option<i32>,
     pub server_config: &'a ServerConfig,
+    pub awaiting_chunks: &'a mut bool,
+    pub player_chunk_x: &'a mut i32,
+    pub player_chunk_z: &'a mut i32,
+    pub pending_chunk_center: &'a mut Option<(i32, i32)>,
 }
 
 impl<'a> HandlerContext<'a> {
@@ -159,11 +163,11 @@ impl PacketRegistry {
         reg.register(ConnectionState::Play, 0x2B,
             Box::new(play_ignore::LogHandler { name: "Player Loaded" }));
 
-        // Silent (frequent) Play packets — tracked in stats but not in packet log
+        // Player position packets — track chunk position for ongoing chunk loading
         reg.register(ConnectionState::Play, 0x1D,
-            Box::new(play_ignore::SilentHandler { name: "Player Position" }));
+            Box::new(player_position::PlayerPositionHandler));
         reg.register(ConnectionState::Play, 0x1E,
-            Box::new(play_ignore::SilentHandler { name: "Player Position & Look" }));
+            Box::new(player_position::PlayerPositionHandler));
         reg.register(ConnectionState::Play, 0x1F,
             Box::new(play_ignore::SilentHandler { name: "Player Look" }));
         reg.register(ConnectionState::Play, 0x20,

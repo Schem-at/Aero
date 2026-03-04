@@ -1,10 +1,10 @@
-# minecraft-web-server
+# Aero
 
 A Minecraft Java Edition server that runs entirely in the browser via WebAssembly. Players connect with standard Minecraft clients through a Go proxy that bridges TCP to WebTransport.
 
 ```
 Minecraft Client (TCP)
-  --> Go Proxy (subdomain routing)
+  --> Aero Proxy (subdomain routing)
     --> WebTransport (HTTP/3 / QUIC)
       --> Browser (React UI + Rust WASM server)
 ```
@@ -13,7 +13,7 @@ Minecraft Client (TCP)
 
 ### Rust WASM Server (`server/`)
 
-The core Minecraft protocol implementation, compiled to WebAssembly. Handles the full connection lifecycle: handshake, server list ping, authentication (RSA + AES encryption, Mojang session verification), configuration, and play state. Runs inside the browser as a WASM module.
+The core Minecraft protocol implementation, compiled to WebAssembly. Handles the full connection lifecycle: handshake, server list ping, authentication (RSA + AES encryption, Mojang session verification), configuration, and play state. Runs inside the browser as a WASM module on a dedicated Web Worker.
 
 Key capabilities:
 - Minecraft protocol 774 (1.21.11)
@@ -22,7 +22,7 @@ Key capabilities:
 - Mojang authentication (session server verification delegated to JS)
 - NBT encoding for registries, world data, and chat
 - Server List Ping with configurable MOTD, favicon, and player count
-- Flat world generation with chunk streaming
+- Pluggable world generation with chunk streaming
 - Bidirectional chat (player messages + server-sent System Chat)
 
 ### Go Proxy (`proxy/`)
@@ -33,7 +33,8 @@ Components:
 - **TCP Listener** — Accepts Minecraft client connections, parses handshake for subdomain routing
 - **WebTransport Server** — HTTP/3 endpoint that browser sessions connect to, with TLS certificate pinning
 - **Router** — Maps subdomains to active browser sessions
-- **Bridge** — Bidirectional byte forwarding between TCP and WebTransport streams
+- **Bridge** — Bidirectional byte forwarding between TCP and WebTransport streams with byte counting
+- **Metrics API** — HTTP dashboard and JSON API for proxy monitoring (port 9090)
 
 ### React Frontend (`web/`)
 
@@ -46,8 +47,10 @@ Features:
 - Packet inspector with hex dumps and per-packet timing
 - Live stats (TPS, MSPT, packets/sec, bandwidth, uptime)
 - Server settings (MOTD, max players, version string, favicon upload)
+- World generation editor with WebGPU shader support
+- Plugin system for extensible world generators
 
-The frontend initializes WebTransport to the proxy, then processes all incoming Minecraft packets through the WASM module. A mutex serializes WASM access when multiple clients connect simultaneously.
+The WASM module and WebTransport run on a dedicated Web Worker, keeping the UI thread responsive.
 
 ## Prerequisites
 
@@ -75,6 +78,7 @@ This will:
 
 Once running:
 - **Web UI**: http://localhost:5555
+- **Proxy Dashboard**: http://localhost:9090
 - **Minecraft TCP**: localhost:25580
 - **WebTransport**: localhost:4433
 
@@ -92,6 +96,7 @@ Copy `.env.example` to `.env` to customize ports:
 ```
 TCP_PORT=25580    # Minecraft clients connect here
 WT_PORT=4433      # WebTransport/QUIC port
+API_PORT=9090     # Proxy dashboard/metrics
 DOMAIN=localhost  # Base domain for subdomain routing
 WEB_PORT=5555     # Vite dev server port
 ```
@@ -99,10 +104,10 @@ WEB_PORT=5555     # Vite dev server port
 ## Project Structure
 
 ```
-minecraft-web-server/
+aero/
 ├── server/                 # Rust WASM crate
 │   └── src/
-│       ├── lib.rs          # WASM exports (handle_packet, queue_chat, etc.)
+│       ├── lib.rs          # WASM exports (handle_packet, build_chunk, etc.)
 │       ├── connection.rs   # Connection state machine + packet dispatch
 │       ├── protocol/       # Minecraft protocol (packets, handlers, types)
 │       ├── crypto.rs       # RSA + AES encryption
@@ -116,12 +121,15 @@ minecraft-web-server/
 │       ├── transport/      # WebTransport server
 │       ├── tcp/            # TCP listener + handshake parsing
 │       ├── router/         # Subdomain session routing
-│       └── bridge/         # Bidirectional forwarding
+│       ├── bridge/         # Bidirectional forwarding + byte counting
+│       └── metrics/        # Dashboard + JSON API
 ├── web/                    # React frontend
 │   ├── src/
-│   │   ├── components/     # UI components (Console, Chat, Packets, Stats)
-│   │   ├── context/        # React contexts (Server, Logs, Stats)
-│   │   ├── lib/            # WASM loader + WebTransport client
+│   │   ├── components/     # UI components (Console, Chat, Packets, Stats, WorldGen)
+│   │   ├── context/        # React contexts (Server, Logs, Stats, Worker, Plugin)
+│   │   ├── workers/        # Web Worker (WASM + WebTransport)
+│   │   ├── plugins/        # World generators (flat, shader)
+│   │   ├── lib/            # Server bridge + utilities
 │   │   └── types/          # TypeScript types
 │   └── public/wasm/        # WASM build output (gitignored)
 └── scripts/
@@ -148,13 +156,16 @@ minecraft-web-server/
 2. Minecraft client connects to `room.localhost:25580` via TCP
 3. Proxy reads the handshake, extracts subdomain `room`, finds the browser session
 4. Proxy opens a new WebTransport stream and replays the handshake bytes
-5. Browser receives bytes on the stream, passes them to WASM `handle_packet()`
+5. Browser's Web Worker receives bytes on the stream, passes them to WASM `handle_packet()`
 6. WASM processes the Minecraft protocol (handshake → login → encryption → config → play)
 7. Response bytes flow back: WASM → WebTransport stream → proxy → TCP → Minecraft client
-8. For Mojang authentication, the browser fetches the session server API and feeds the response back to WASM
+8. For Mojang authentication, the worker fetches the session server API and feeds the response back to WASM
 
-**WASM ↔ JavaScript bridge:**
+**Chunk generation flow:**
 
-The Rust WASM module communicates with JavaScript through:
-- **Exports**: `handle_packet`, `reset_state`, `get_stats`, `get_packet_log`, `queue_chat`, etc.
-- **Imports**: `window.__mc_server_log(level, category, message)` — logging callback that feeds the React console
+1. Player joins → WASM emits init packets and requests chunks
+2. Worker posts `chunks_needed` to main thread
+3. Main thread's plugin system generates block data (sync via FlatGenerator or async via WebGPU ShaderGenerator)
+4. Block state arrays are transferred back to the worker
+5. Worker calls WASM `build_chunk()` to serialize into encrypted protocol bytes
+6. Chunks stream to the client, followed by batch finish packets

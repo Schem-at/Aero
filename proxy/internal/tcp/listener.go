@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/user/minecraft-web/proxy/internal/bridge"
+	"github.com/user/minecraft-web/proxy/internal/metrics"
 	"github.com/user/minecraft-web/proxy/internal/router"
 )
 
@@ -64,10 +65,13 @@ func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 	subdomain := extractSubdomain(serverAddr, l.Domain)
 	log.Printf("tcp: client connecting to room %q (address: %s)", subdomain, serverAddr)
 
+	m := metrics.Get()
+
 	// Look up the browser session
 	session := l.Router.Lookup(subdomain)
 	if session == nil {
 		log.Printf("tcp: no session for room %q", subdomain)
+		m.BridgeFailed()
 		return
 	}
 
@@ -75,6 +79,7 @@ func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 	stream, err := session.OpenStream(ctx)
 	if err != nil {
 		log.Printf("tcp: open WT stream failed: %v", err)
+		m.BridgeFailed()
 		return
 	}
 
@@ -82,11 +87,13 @@ func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 	if _, err := stream.Write(raw); err != nil {
 		log.Printf("tcp: replay handshake failed: %v", err)
 		stream.Close()
+		m.BridgeFailed()
 		return
 	}
 
 	// Bridge the TCP connection and WebTransport stream
 	b := bridge.New(conn, stream)
+	m.BridgeStarted(subdomain)
 	log.Printf("tcp: bridge active for room %q", subdomain)
 
 	select {
@@ -94,6 +101,11 @@ func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 	case <-ctx.Done():
 		b.Close()
 	}
+
+	// Record byte counts from this bridge
+	m.AddBytesIn(b.Counter.In.Load())
+	m.AddBytesOut(b.Counter.Out.Load())
+	m.BridgeStopped(subdomain)
 	log.Printf("tcp: bridge closed for room %q", subdomain)
 }
 

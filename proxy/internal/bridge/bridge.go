@@ -3,14 +3,33 @@ package bridge
 import (
 	"io"
 	"sync"
+	"sync/atomic"
 )
+
+// ByteCounter tracks bytes flowing through the bridge.
+type ByteCounter struct {
+	In  atomic.Int64
+	Out atomic.Int64
+}
+
+type countingWriter struct {
+	w       io.Writer
+	counter *atomic.Int64
+}
+
+func (cw *countingWriter) Write(p []byte) (int, error) {
+	n, err := cw.w.Write(p)
+	cw.counter.Add(int64(n))
+	return n, err
+}
 
 // Bridge forwards bytes bidirectionally between a TCP connection and a WebTransport stream.
 type Bridge struct {
-	tcp  io.ReadWriteCloser
-	wt   io.ReadWriteCloser
-	done chan struct{}
-	once sync.Once
+	tcp     io.ReadWriteCloser
+	wt      io.ReadWriteCloser
+	done    chan struct{}
+	once    sync.Once
+	Counter ByteCounter
 }
 
 // New creates a Bridge between two ReadWriteClosers and starts forwarding.
@@ -20,8 +39,9 @@ func New(tcp io.ReadWriteCloser, wt io.ReadWriteCloser) *Bridge {
 		wt:   wt,
 		done: make(chan struct{}),
 	}
-	go b.forward(tcp, wt)
-	go b.forward(wt, tcp)
+	// tcp→wt = bytes "in" from MC client, wt→tcp = bytes "out" to MC client
+	go b.forward(&countingWriter{w: wt, counter: &b.Counter.In}, tcp)
+	go b.forward(&countingWriter{w: tcp, counter: &b.Counter.Out}, wt)
 	return b
 }
 

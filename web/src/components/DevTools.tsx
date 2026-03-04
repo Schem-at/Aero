@@ -5,14 +5,16 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { PacketInspector } from "@/components/PacketInspector";
 import { StatsPanel } from "@/components/StatsPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { WorldGenPanel } from "@/components/WorldGenPanel";
 
-type Tab = "console" | "chat" | "packets" | "stats" | "settings";
+type Tab = "console" | "chat" | "packets" | "stats" | "worldgen" | "settings";
 
 const tabs: { id: Tab; label: string }[] = [
   { id: "console", label: "Console" },
   { id: "chat", label: "Chat" },
   { id: "packets", label: "Packets" },
   { id: "stats", label: "Stats" },
+  { id: "worldgen", label: "World Gen" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -41,6 +43,7 @@ export function DevTools() {
         {active === "chat" && <ChatPanel />}
         {active === "packets" && <PacketInspector />}
         {active === "stats" && <StatsPanel />}
+        {active === "worldgen" && <WorldGenPanel />}
         {active === "settings" && <SettingsPanel />}
       </div>
     </Card>
