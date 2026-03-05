@@ -30,6 +30,12 @@ pub struct HandlerContext<'a> {
     pub pending_chunk_center: &'a mut Option<(i32, i32)>,
     pub fly_speed: &'a mut f32,
     pub is_flying: &'a mut bool,
+    pub player_x: &'a mut f64,
+    pub player_y: &'a mut f64,
+    pub player_z: &'a mut f64,
+    pub player_yaw: &'a mut f32,
+    pub player_pitch: &'a mut f32,
+    pub position_dirty: &'a mut bool,
 }
 
 impl<'a> HandlerContext<'a> {
@@ -177,9 +183,9 @@ impl PacketRegistry {
         reg.register(ConnectionState::Play, 0x1E,
             Box::new(player_position::PlayerPositionHandler));
         reg.register(ConnectionState::Play, 0x1F,
-            Box::new(play_ignore::SilentHandler { name: "Player Look" }));
+            Box::new(player_position::PlayerPositionHandler));
         reg.register(ConnectionState::Play, 0x20,
-            Box::new(play_ignore::SilentHandler { name: "Player On Ground" }));
+            Box::new(player_position::PlayerPositionHandler));
         reg.register(ConnectionState::Play, 0x29, // Player Command (sprint/sneak/elytra)
             Box::new(play_ignore::SilentHandler { name: "Player Command" }));
         reg.register(ConnectionState::Play, 0x2A, // was incorrectly 0x29

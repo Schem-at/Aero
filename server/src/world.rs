@@ -743,17 +743,25 @@ pub fn build_spawn_entity_payload(entity_id: i32, uuid: &str, x: f64, y: f64, z:
 }
 
 /// Build Entity Teleport (0x7b) payload.
+/// Protocol 774 format: VarInt entityId, Vec3<f64> position, Vec3<f64> delta,
+/// f32 yaw, f32 pitch, i32 relatives (bitfield), bool onGround
 pub fn build_entity_teleport_payload(entity_id: i32, x: f64, y: f64, z: f64, yaw: f32, pitch: f32, on_ground: bool) -> Vec<u8> {
     let mut p = Vec::new();
     // Entity ID (VarInt)
     p.extend_from_slice(&write_varint(entity_id));
-    // X, Y, Z (f64)
+    // Position: X, Y, Z (f64)
     p.extend_from_slice(&x.to_be_bytes());
     p.extend_from_slice(&y.to_be_bytes());
     p.extend_from_slice(&z.to_be_bytes());
-    // Yaw, Pitch (angle bytes)
-    p.push(angle_to_byte(yaw));
-    p.push(angle_to_byte(pitch));
+    // Delta: dX, dY, dZ (f64) — zero for absolute teleport
+    p.extend_from_slice(&0.0f64.to_be_bytes());
+    p.extend_from_slice(&0.0f64.to_be_bytes());
+    p.extend_from_slice(&0.0f64.to_be_bytes());
+    // Yaw, Pitch (f32)
+    p.extend_from_slice(&yaw.to_be_bytes());
+    p.extend_from_slice(&pitch.to_be_bytes());
+    // Relatives (i32 bitfield) — 0 = all absolute
+    p.extend_from_slice(&0i32.to_be_bytes());
     // On Ground
     p.push(if on_ground { 1 } else { 0 });
     p

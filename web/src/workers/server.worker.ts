@@ -239,6 +239,8 @@ interface ClientSession {
   z: number;
   yaw: number;
   pitch: number;
+  // True once the player has fully entered Play state
+  inPlay: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +272,7 @@ function chunkKey(cx: number, cz: number): string {
 function broadcastExcept(excludeId: number, buildFn: (targetId: number) => Uint8Array): void {
   for (const [, session] of sessions) {
     if (session.connectionId === excludeId) continue;
-    if (!session.username) continue; // Not yet fully connected
+    if (!session.inPlay) continue; // Not yet in Play state
     try {
       const bytes = buildFn(session.connectionId);
       if (bytes.length > 0) {
@@ -354,7 +356,7 @@ function broadcastPosition(session: ClientSession): void {
 /** Broadcast a chat message to all players. */
 function broadcastChatMessage(message: string): void {
   for (const [, session] of sessions) {
-    if (!session.username) continue;
+    if (!session.inPlay) continue;
     try {
       const bytes = new Uint8Array(wasmModule.build_system_chat(session.connectionId, message));
       if (bytes.length > 0) {
@@ -626,6 +628,7 @@ async function handleStream(stream: StreamHandle): Promise<void> {
     propertiesJson: "[]",
     x: 8, y: 66, z: 8,
     yaw: 0, pitch: 0,
+    inPlay: false,
   };
 
   sessions.set(connectionId, session);
@@ -699,6 +702,7 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         // Player has entered play state — notify other players
         if (!playerJoined && session.username) {
           playerJoined = true;
+          session.inPlay = true;
           postMsg({ type: "log", level: "info", category: "system",
             message: `${session.username} joined the server (entity ${entityId})` });
           onPlayerJoined(session);
@@ -707,15 +711,18 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         requestChunksForSession(session);
       }
 
-      // Check for position updates (pending chunk center means player moved)
-      const centerStr = wasmModule.get_pending_chunk_center(connectionId) as string;
-      if (centerStr && playerJoined) {
-        // Player moved to new chunk — update position estimate
-        const [cx, cz] = centerStr.split(",").map(Number);
-        session.x = cx * 16 + 8;
-        session.z = cz * 16 + 8;
-        broadcastPosition(session);
-        requestChunksForSession(session);
+      // Check for position/rotation updates from WASM (dirty flag)
+      if (playerJoined) {
+        const posStr = wasmModule.get_player_position(connectionId) as string;
+        if (posStr) {
+          const pos = JSON.parse(posStr);
+          session.x = pos.x;
+          session.y = pos.y;
+          session.z = pos.z;
+          session.yaw = pos.yaw;
+          session.pitch = pos.pitch;
+          broadcastPosition(session);
+        }
       }
     }
   } catch (err) {

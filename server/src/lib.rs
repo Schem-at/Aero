@@ -603,4 +603,25 @@ mod wasm_exports {
             pool.connections.get(&id).map(|c| c.entity_id).unwrap_or(0)
         })
     }
+
+    /// Get the player's position if it changed since last call.
+    /// Returns empty string if no change, or JSON {x,y,z,yaw,pitch} if dirty.
+    #[wasm_bindgen]
+    pub fn get_player_position(id: u32) -> String {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                if conn.position_dirty {
+                    conn.position_dirty = false;
+                    format!("{{\"x\":{},\"y\":{},\"z\":{},\"yaw\":{},\"pitch\":{}}}",
+                        conn.player_x, conn.player_y, conn.player_z,
+                        conn.player_yaw, conn.player_pitch)
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        })
+    }
 }

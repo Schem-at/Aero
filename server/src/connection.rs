@@ -62,6 +62,12 @@ pub struct Connection {
     pub pending_chunk_center: Option<(i32, i32)>,
     pub fly_speed: f32,
     pub is_flying: bool,
+    pub player_x: f64,
+    pub player_y: f64,
+    pub player_z: f64,
+    pub player_yaw: f32,
+    pub player_pitch: f32,
+    pub position_dirty: bool,
     logger: Box<dyn Logger>,
     registry: PacketRegistry,
 }
@@ -88,6 +94,12 @@ impl Connection {
             pending_chunk_center: None,
             fly_speed: 0.05,
             is_flying: false,
+            player_x: 8.0,
+            player_y: 65.0,
+            player_z: 8.0,
+            player_yaw: 0.0,
+            player_pitch: 0.0,
+            position_dirty: false,
             logger,
             registry: PacketRegistry::default_registry(),
         }
@@ -109,6 +121,12 @@ impl Connection {
         self.pending_chunk_center = None;
         self.fly_speed = 0.05;
         self.is_flying = false;
+        self.player_x = 8.0;
+        self.player_y = 65.0;
+        self.player_z = 8.0;
+        self.player_yaw = 0.0;
+        self.player_pitch = 0.0;
+        self.position_dirty = false;
         self.stats.player_count = 0;
         self.stats.connected_at_ms = 0.0;
         self.log(LogLevel::Debug, LogCategory::System, "Connection state reset to Handshaking");
@@ -201,6 +219,12 @@ impl Connection {
                 pending_chunk_center: &mut self.pending_chunk_center,
                 fly_speed: &mut self.fly_speed,
                 is_flying: &mut self.is_flying,
+                player_x: &mut self.player_x,
+                player_y: &mut self.player_y,
+                player_z: &mut self.player_z,
+                player_yaw: &mut self.player_yaw,
+                player_pitch: &mut self.player_pitch,
+                position_dirty: &mut self.position_dirty,
             };
 
             let result = handler.handle(&payload, &mut ctx);
