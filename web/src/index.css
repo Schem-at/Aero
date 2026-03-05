@@ -24,6 +24,35 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Hide scrollbar for horizontal tab scrolling */
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* View transition: server panel minimize/expand */
+::view-transition-old(server-panel),
+::view-transition-new(server-panel) {
+  animation-duration: 0.4s;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.1, 1);
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+/* Mini widget entrance animation */
+.server-mini-widget {
+  animation: widgetSlideIn 0.4s cubic-bezier(0.4, 0, 0.1, 1) both;
+}
+
+@keyframes widgetSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 /* WGSL syntax highlighting tokens */
 .tok-keyword { color: #c084fc; }
 .tok-type { color: #22d3ee; }

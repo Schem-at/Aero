@@ -1,6 +1,7 @@
-import React from "react";
-import { AeroLogo } from "@/components/AeroLogo";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useServer } from "@/context/ServerContext";
+import { useStats } from "@/context/StatsContext";
 
 const BOOT_LOGS = [
   { prefix: "ok", text: "wasm runtime initialized (aero_server.wasm)", color: "text-emerald-500" },
@@ -11,19 +12,138 @@ const BOOT_LOGS = [
   { prefix: "ok", text: "all systems nominal", color: "text-emerald-500" },
 ];
 
+interface TerminalLine {
+  type: "input" | "output";
+  text: string;
+}
+
 export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "servers") => void }) {
   const { isAuthenticated } = useAuth();
+  const { status, assignedRoom } = useServer();
+  const { stats } = useStats();
+  const [input, setInput] = useState("");
+  const [history, setHistory] = useState<TerminalLine[]>([]);
+  const [cmdHistory, setCmdHistory] = useState<string[]>([]);
+  const [historyIdx, setHistoryIdx] = useState(-1);
+  const [promptActive, setPromptActive] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const runCommand = useCallback((cmd: string) => {
+    const trimmed = cmd.trim().toLowerCase();
+    if (!trimmed) return;
+
+    const lines: TerminalLine[] = [{ type: "input", text: cmd.trim() }];
+    setCmdHistory(prev => [cmd.trim(), ...prev]);
+    setHistoryIdx(-1);
+
+    switch (trimmed) {
+      case "help":
+        lines.push({ type: "output", text: "Available commands:" });
+        lines.push({ type: "output", text: "  \x1bGhelp\x1bR      — show this message" });
+        lines.push({ type: "output", text: "  \x1bGstatus\x1bR    — server & proxy status" });
+        lines.push({ type: "output", text: "  \x1bGabout\x1bR     — what is Aero?" });
+        lines.push({ type: "output", text: "  \x1bGgithub\x1bR    — open source repo" });
+        lines.push({ type: "output", text: "  \x1bGserver\x1bR    — go to host page" });
+        lines.push({ type: "output", text: "  \x1bGservers\x1bR   — browse public servers" });
+        lines.push({ type: "output", text: "  \x1bGclear\x1bR     — clear terminal" });
+        break;
+      case "status": {
+        const running = status === "running";
+        lines.push({ type: "output", text: `server:  ${running ? `\x1bGrunning\x1bR (${assignedRoom || "unknown"})` : "\x1bYstopped\x1bR"}` });
+        if (running && stats) {
+          lines.push({ type: "output", text: `players: ${stats.player_count} online` });
+        }
+        // Fetch proxy status
+        fetch("/api/servers").then(r => r.json()).then((servers: any[]) => {
+          setHistory(prev => [...prev, { type: "output", text: `public:  ${servers.length} server${servers.length !== 1 ? "s" : ""} listed` }]);
+        }).catch(() => {
+          setHistory(prev => [...prev, { type: "output", text: "public:  unavailable" }]);
+        });
+        break;
+      }
+      case "about":
+        lines.push({ type: "output", text: "" });
+        lines.push({ type: "output", text: "\x1bG      ███╗███████╗██████╗  ██████╗" });
+        lines.push({ type: "output", text: "\x1bG     ████║██╔════╝██╔══██╗██╔═══██╗" });
+        lines.push({ type: "output", text: "\x1bG    ██╔██║█████╗  ██████╔╝██║   ██║" });
+        lines.push({ type: "output", text: "\x1bC   ██╔╝██║██╔══╝  ██╔══██╗██║   ██║" });
+        lines.push({ type: "output", text: "\x1bC  ██╔╝ ██║███████╗██║  ██║╚██████╔╝" });
+        lines.push({ type: "output", text: "\x1bC  ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝" });
+        lines.push({ type: "output", text: "" });
+        lines.push({ type: "output", text: "  A full Minecraft server compiled to \x1bGWebAssembly\x1bR." });
+        lines.push({ type: "output", text: "  Runs entirely in your browser, bridged to real" });
+        lines.push({ type: "output", text: "  Java Edition clients via a \x1bCWebTransport\x1bR proxy." });
+        lines.push({ type: "output", text: "" });
+        lines.push({ type: "output", text: "  \x1bGRust\x1bR (WASM server)  \x1bCGo\x1bR (proxy bridge)  \x1bYWGSL\x1bR (GPU worldgen)" });
+        lines.push({ type: "output", text: "" });
+        lines.push({ type: "output", text: "  Protocol \x1bY774\x1bR · Minecraft \x1bY1.21.11\x1bR · Java Edition" });
+        lines.push({ type: "output", text: "  github.com/schem-at/aero" });
+        lines.push({ type: "output", text: "" });
+        break;
+      case "github":
+        window.open("https://github.com/schem-at/aero", "_blank");
+        lines.push({ type: "output", text: "Opening \x1bGgithub.com/schem-at/aero\x1bR ..." });
+        break;
+      case "server":
+        navigate("server");
+        return;
+      case "servers":
+        navigate("servers");
+        return;
+      case "proxy":
+        if (isAuthenticated) navigate("proxy");
+        else lines.push({ type: "output", text: "proxy: requires authentication" });
+        break;
+      case "clear":
+        setHistory([]);
+        setInput("");
+        return;
+      default:
+        lines.push({ type: "output", text: `command not found: ${cmd.trim()}` });
+        lines.push({ type: "output", text: "type 'help' for available commands" });
+    }
+
+    setHistory(prev => [...prev, ...lines]);
+    setInput("");
+  }, [status, assignedRoom, stats, isAuthenticated, navigate]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      runCommand(input);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (cmdHistory.length > 0) {
+        const next = Math.min(historyIdx + 1, cmdHistory.length - 1);
+        setHistoryIdx(next);
+        setInput(cmdHistory[next]);
+      }
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (historyIdx > 0) {
+        const next = historyIdx - 1;
+        setHistoryIdx(next);
+        setInput(cmdHistory[next]);
+      } else {
+        setHistoryIdx(-1);
+        setInput("");
+      }
+    }
+  };
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
+  }, [history]);
+
   return (
     <div className="min-h-full bg-[#050505] p-4 md:p-8 flex items-center justify-center font-mono selection:bg-emerald-500/30 selection:text-emerald-200 relative overflow-hidden">
-      
+
       {/* Background ambient logs */}
       <div className="absolute inset-0 z-0 pointer-events-none select-none flex flex-col justify-center">
-        {/* Radial fade so the center is clear for the terminal */}
-        <div 
-          className="absolute inset-0 z-10" 
-          style={{ background: 'radial-gradient(circle, transparent 10%, #050505 80%)' }} 
+        <div
+          className="absolute inset-0 z-10"
+          style={{ background: 'radial-gradient(circle, transparent 10%, #050505 80%)' }}
         />
-        {/* Repeating logs moving upwards */}
         <div className="animate-[scrollUp_40s_linear_infinite] space-y-2 flex flex-col opacity-[0.25]">
           {Array.from({ length: 30 }).map((_, i) => (
             <div key={i} className="text-[11px] leading-none text-zinc-600 whitespace-nowrap flex gap-8">
@@ -43,7 +163,7 @@ export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "
 
       {/* Terminal Window */}
       <div className="relative z-10 w-full max-w-4xl border border-zinc-800/80 bg-[#0a0a0a]/95 backdrop-blur-xl rounded-lg shadow-[0_0_80px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden">
-        
+
         {/* Title bar */}
         <div className="h-10 border-b border-zinc-800/80 bg-zinc-950/90 flex items-center px-4 justify-between shrink-0">
           <div className="flex gap-2">
@@ -56,22 +176,20 @@ export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "
         </div>
 
         {/* Content */}
-        <div className="p-6 md:p-10 text-sm text-zinc-300 overflow-y-auto max-h-[80vh]">
+        <div ref={scrollRef} className="p-6 md:p-10 text-sm text-zinc-300 overflow-y-auto max-h-[80vh]">
           <div className="animate-[fadeIn_0.5s_ease-out]">
-            
-            {/* Command run */}
-            <div className="flex items-center gap-2 mb-8">
-              <span className="text-emerald-500 font-bold">root@aero</span>
-              <span className="text-zinc-600">~</span>
-              <span className="text-zinc-400">$</span>
-              <span className="text-zinc-100">./aero --status</span>
-            </div>
 
             {/* Title */}
             <div className="mb-10 pl-2">
-              <div className="flex items-center gap-4 text-emerald-400 font-black text-3xl md:text-5xl tracking-tighter mb-2 drop-shadow-[0_0_15px_rgba(52,211,153,0.2)]">
-                <AeroLogo className="w-10 h-10 md:w-12 md:h-12" />
-                AERO
+              <div className="mb-6">
+                <pre className="text-emerald-400 font-black leading-[1.1] tracking-tight text-[10px] sm:text-xs md:text-[15px] drop-shadow-[0_0_15px_rgba(52,211,153,0.2)] m-0 p-0">
+<span className="text-emerald-300 animate-pulse drop-shadow-[0_0_10px_rgba(52,211,153,0.8)]">{"      ███╗"}</span>{"███████╗██████╗  ██████╗\n"}
+<span className="text-emerald-300 animate-pulse drop-shadow-[0_0_10px_rgba(52,211,153,0.8)]">{"     ████║"}</span>{"██╔════╝██╔══██╗██╔═══██╗\n"}
+<span className="text-emerald-300 animate-pulse drop-shadow-[0_0_10px_rgba(52,211,153,0.8)]">{"    ██╔██║"}</span>{"█████╗  ██████╔╝██║   ██║\n"}
+<span className="text-emerald-300 animate-pulse drop-shadow-[0_0_10px_rgba(52,211,153,0.8)]">{"   ██╔╝██║"}</span>{"██╔══╝  ██╔══██╗██║   ██║\n"}
+<span className="text-emerald-300 animate-pulse drop-shadow-[0_0_10px_rgba(52,211,153,0.8)]">{"  ██╔╝ ██║"}</span>{"███████╗██║  ██║╚██████╔╝\n"}
+<span className="text-emerald-300 animate-pulse drop-shadow-[0_0_10px_rgba(52,211,153,0.8)]">{"  ╚═╝  ╚═╝"}</span>{"╚══════╝╚═╝  ╚═╝ ╚═════╝  "}
+                </pre>
               </div>
               <div className="text-zinc-400 max-w-xl leading-relaxed text-xs md:text-sm border-l-2 border-zinc-800 pl-4 mt-4">
                 A full Minecraft server compiled to WebAssembly. Runs in a dedicated Web Worker, bridged to real Java Edition clients via a WebTransport proxy.
@@ -80,7 +198,7 @@ export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "
 
             {/* Structured Info */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-16 gap-y-10 mb-12 pl-2">
-              
+
               {/* Architecture Block */}
               <div>
                 <div className="text-zinc-100 font-bold mb-4 uppercase tracking-widest text-xs border-b border-zinc-800 pb-2 flex items-center gap-2">
@@ -114,10 +232,10 @@ export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "
                     </div>
                     <div className="flex flex-col">
                       <span className="text-emerald-400 font-bold">Browser (WASM)</span>
-                      <span className="text-[10px] text-zinc-600">WebTransport</span>
+                      <span className="text-[10px] text-zinc-600">WebTransport / WebSocket</span>
                     </div>
                   </div>
-                  
+
                   <div className="flex items-center gap-4 relative z-10 pt-2">
                     <div className="w-8 h-8 rounded bg-zinc-900 border border-cyan-500/30 flex items-center justify-center shrink-0">
                       <span className="w-2 h-2 rounded-full bg-cyan-500" />
@@ -142,21 +260,14 @@ export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "
 
             </div>
 
-            {/* Action Prompt */}
-            <div className="flex items-center gap-2 mb-6">
-              <span className="text-emerald-500 font-bold">root@aero</span>
-              <span className="text-zinc-600">~</span>
-              <span className="text-zinc-400">$</span>
-              <span className="text-zinc-100 select-none animate-[pulse_1s_infinite]">_</span>
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-4 pl-2 pb-4">
+            {/* Action buttons */}
+            <div className="flex flex-col sm:flex-row gap-4 pl-2 mb-8">
               <button
                 onClick={() => navigate("server")}
                 className="group relative px-5 py-3 border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-emerald-500/50 transition-all text-left flex flex-col gap-1 w-full sm:w-auto min-w-[200px]"
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-zinc-300 font-bold text-xs group-hover:text-emerald-400 transition-colors">./launch_server.sh</span>
+                  <span className="text-zinc-300 font-bold text-xs group-hover:text-emerald-400 transition-colors">Launch Server</span>
                   <span className="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity ml-auto">↵</span>
                 </div>
                 <span className="text-[10px] text-zinc-600">Initialize WASM engine</span>
@@ -167,10 +278,10 @@ export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "
                 className="group relative px-5 py-3 border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-amber-500/50 transition-all text-left flex flex-col gap-1 w-full sm:w-auto min-w-[200px]"
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-zinc-300 font-bold text-xs group-hover:text-amber-400 transition-colors">./browse_servers.sh</span>
+                  <span className="text-zinc-300 font-bold text-xs group-hover:text-amber-400 transition-colors">Browse Servers</span>
                   <span className="text-amber-500 opacity-0 group-hover:opacity-100 transition-opacity ml-auto">↵</span>
                 </div>
-                <span className="text-[10px] text-zinc-600">Browse public servers</span>
+                <span className="text-[10px] text-zinc-600">Public server list</span>
               </button>
 
               {isAuthenticated && (
@@ -179,7 +290,7 @@ export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "
                   className="group relative px-5 py-3 border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-cyan-500/50 transition-all text-left flex flex-col gap-1 w-full sm:w-auto min-w-[200px]"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-zinc-300 font-bold text-xs group-hover:text-cyan-400 transition-colors">./proxy_dashboard.sh</span>
+                    <span className="text-zinc-300 font-bold text-xs group-hover:text-cyan-400 transition-colors">Proxy Dashboard</span>
                     <span className="text-cyan-500 opacity-0 group-hover:opacity-100 transition-opacity ml-auto">↵</span>
                   </div>
                   <span className="text-[10px] text-zinc-600">Monitor network bridge</span>
@@ -187,10 +298,53 @@ export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "
               )}
             </div>
 
+            {/* Terminal history */}
+            {history.map((line, i) => (
+              <div key={i} className="pl-2">
+                {line.type === "input" ? (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-emerald-500 font-bold">root@aero</span>
+                    <span className="text-zinc-600">~</span>
+                    <span className="text-zinc-400">$</span>
+                    <span className="text-zinc-100">{line.text}</span>
+                  </div>
+                ) : (
+                  <div className="text-xs text-zinc-400 pl-4 whitespace-pre">
+                    <TermOutput text={line.text} />
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {/* Interactive prompt */}
+            <div
+              className="flex items-center gap-2 pl-2 mt-2 cursor-text"
+              onClick={() => { setPromptActive(true); inputRef.current?.focus(); }}
+            >
+              <span className="text-emerald-500 font-bold text-xs">root@aero</span>
+              <span className="text-zinc-600 text-xs">~</span>
+              <span className="text-zinc-400 text-xs">$</span>
+              {promptActive ? (
+                <input
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  onBlur={() => { if (!input && history.length === 0) setPromptActive(false); }}
+                  className="flex-1 bg-transparent text-xs text-zinc-100 outline-none caret-emerald-500"
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoFocus
+                />
+              ) : (
+                <span className="text-zinc-100 select-none animate-[pulse_1s_infinite]">_</span>
+              )}
+            </div>
+
           </div>
         </div>
       </div>
-      
+
       <style dangerouslySetInnerHTML={{ __html: `
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(4px); }
@@ -203,4 +357,25 @@ export function LandingPage({ navigate }: { navigate: (r: "server" | "proxy" | "
       `}} />
     </div>
   );
+}
+
+/** Renders terminal output with inline color codes: \x1bG=green, \x1bY=yellow, \x1bR=reset */
+function TermOutput({ text }: { text: string }) {
+  if (!text.includes("\x1b")) return <>{text}</>;
+  const parts: React.ReactNode[] = [];
+  let current = "";
+  let color = "";
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\x1b" && i + 1 < text.length) {
+      if (current) parts.push(<span key={parts.length} className={color}>{current}</span>);
+      current = "";
+      const code = text[i + 1];
+      color = code === "G" ? "text-emerald-400" : code === "Y" ? "text-amber-400" : code === "C" ? "text-cyan-400" : "";
+      i++;
+    } else {
+      current += text[i];
+    }
+  }
+  if (current) parts.push(<span key={parts.length} className={color}>{current}</span>);
+  return <>{parts}</>;
 }

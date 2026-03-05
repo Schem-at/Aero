@@ -14,7 +14,7 @@ const tabs: { id: Tab; label: string }[] = [
   { id: "chat", label: "Chat" },
   { id: "packets", label: "Packets" },
   { id: "stats", label: "Stats" },
-  { id: "worldgen", label: "World Gen" },
+  { id: "worldgen", label: "WorldGen" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -23,12 +23,12 @@ export function DevTools() {
 
   return (
     <Card className="flex flex-col flex-1 min-h-0 p-0 overflow-hidden">
-      <div className="flex items-center border-b border-border">
+      <div className="flex items-center border-b border-border overflow-x-auto scrollbar-none">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActive(tab.id)}
-            className={`px-4 py-2 text-xs font-medium uppercase tracking-wider transition-colors ${
+            className={`px-3 sm:px-4 py-2 text-[11px] sm:text-xs font-medium uppercase tracking-wider transition-colors whitespace-nowrap shrink-0 ${
               active === tab.id
                 ? "text-foreground border-b-2 border-primary"
                 : "text-muted-foreground hover:text-foreground"

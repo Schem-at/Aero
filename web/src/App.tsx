@@ -6,7 +6,15 @@ import { LandingPage } from "@/pages/LandingPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { ServersPage } from "@/pages/ServersPage";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
-import { Server, Activity, TerminalSquare, LogOut, Globe } from "lucide-react";
+import { ServerProvider } from "@/context/ServerContext";
+import { LogProvider } from "@/context/LogContext";
+import { StatsProvider } from "@/context/StatsContext";
+import { ServerConfigProvider } from "@/context/ServerConfigContext";
+import { PluginProvider } from "@/context/PluginContext";
+import { WorkerProvider } from "@/context/WorkerContext";
+import { ServerMiniWidget } from "@/components/ServerMiniWidget";
+import { useServer } from "@/context/ServerContext";
+import { Server, Activity, LogOut, Globe } from "lucide-react";
 import { AeroLogo } from "@/components/AeroLogo";
 
 type Route = "" | "server" | "proxy" | "servers";
@@ -20,7 +28,20 @@ function getRoute(): Route {
 export function App() {
   return (
     <AuthProvider>
-      <AppInner />
+      {/* Server providers at app level so server persists across navigation */}
+      <ServerProvider>
+        <LogProvider>
+          <StatsProvider>
+            <ServerConfigProvider>
+              <PluginProvider>
+                <WorkerProvider>
+                  <AppInner />
+                </WorkerProvider>
+              </PluginProvider>
+            </ServerConfigProvider>
+          </StatsProvider>
+        </LogProvider>
+      </ServerProvider>
     </AuthProvider>
   );
 }
@@ -28,6 +49,7 @@ export function App() {
 function AppInner() {
   const [route, setRoute] = useState<Route>(getRoute);
   const { isAuthenticated, authDisabled, username, logout, loading } = useAuth();
+  const { status } = useServer();
 
   useEffect(() => {
     const onNav = () => {
@@ -52,57 +74,48 @@ function AppInner() {
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, []);
 
+  const isServerActive = route === "server";
+  const showMiniWidget = !isServerActive && status !== "stopped";
+
   return (
     <div className="flex flex-col h-screen bg-[#050505] font-mono selection:bg-emerald-500/30 selection:text-emerald-200 text-zinc-300">
       <nav className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-zinc-800/80 bg-[#0a0a0a] z-50 flex-shrink-0 shadow-sm relative">
         {/* Subtle top highlight */}
         <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-zinc-700/50 to-transparent" />
 
-        <button
-          onClick={() => navigate("")}
-          className="flex items-center gap-3 group"
-        >
-          <AeroLogo className="w-6 h-6 text-zinc-100 group-hover:text-emerald-400 transition-colors drop-shadow-[0_0_8px_rgba(52,211,153,0)] group-hover:drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]" />
-          <div className="flex flex-col text-left">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => navigate("")}
+            className="flex items-center gap-3 group"
+          >
+            <AeroLogo className="w-6 h-6 text-zinc-100 group-hover:text-emerald-400 transition-colors drop-shadow-[0_0_8px_rgba(52,211,153,0)] group-hover:drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]" />
             <span className="text-sm font-bold tracking-widest text-zinc-100 uppercase leading-none">
               Aero
             </span>
-            <span className="text-[9px] text-zinc-600 tracking-widest uppercase mt-0.5">
-              Network Bridge
-            </span>
-          </div>
-        </button>
+          </button>
+        </div>
 
         <div className="flex items-center gap-2 sm:gap-4">
-          <NavLink
-            active={route === ""}
-            onClick={() => navigate("")}
-            icon={<TerminalSquare className="h-3.5 w-3.5" />}
-          >
-            console
-          </NavLink>
           <NavLink
             active={route === "server"}
             onClick={() => navigate("server")}
             icon={<Server className="h-3.5 w-3.5" />}
-          >
-            server
-          </NavLink>
+            label="Host"
+            accent
+          />
           <NavLink
             active={route === "servers"}
             onClick={() => navigate("servers")}
             icon={<Globe className="h-3.5 w-3.5" />}
-          >
-            servers
-          </NavLink>
+            label="Servers"
+          />
           {isAuthenticated && (
             <NavLink
               active={route === "proxy"}
               onClick={() => navigate("proxy")}
               icon={<Activity className="h-3.5 w-3.5" />}
-            >
-              proxy
-            </NavLink>
+              label="Proxy"
+            />
           )}
           {isAuthenticated && !authDisabled && (
             <button
@@ -118,8 +131,16 @@ function AppInner() {
       </nav>
 
       <main className="flex-1 min-h-0 relative">
+        {/* Server page is ALWAYS mounted when not stopped — preserves state */}
+        <div
+          className={isServerActive ? "h-full" : "hidden"}
+          style={{ viewTransitionName: isServerActive ? "server-panel" : undefined }}
+        >
+          <ServerPage />
+        </div>
+
+        {/* Other pages render normally */}
         {route === "" && <LandingPage navigate={navigate} />}
-        {route === "server" && <ServerPage />}
         {route === "servers" && <ServersPage />}
         {route === "proxy" && (
           loading ? (
@@ -132,6 +153,13 @@ function AppInner() {
             <LoginPage />
           )
         )}
+
+        {/* Mini widget when server is running but not viewing server page */}
+        {showMiniWidget && (
+          <ServerMiniWidget
+            onExpand={() => navigate("server")}
+          />
+        )}
       </main>
     </div>
   );
@@ -141,12 +169,14 @@ function NavLink({
   active,
   onClick,
   icon,
-  children,
+  label,
+  accent,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
-  children: React.ReactNode;
+  label: string;
+  accent?: boolean;
 }) {
   return (
     <button
@@ -154,14 +184,15 @@ function NavLink({
       className={`group flex items-center gap-2 px-3 py-1.5 transition-all text-xs font-bold uppercase tracking-wider border-b-2 ${
         active
           ? "border-emerald-500 text-emerald-400 bg-emerald-500/5"
-          : "border-transparent text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30 hover:border-zinc-700"
+          : accent
+            ? "border-transparent text-emerald-500/70 hover:text-emerald-400 hover:bg-emerald-500/5 hover:border-emerald-500/30"
+            : "border-transparent text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30 hover:border-zinc-700"
       }`}
     >
-      <span className={active ? "text-emerald-500" : "text-zinc-600 group-hover:text-zinc-400 transition-colors"}>
+      <span className={active ? "text-emerald-500" : accent ? "text-emerald-500/50 group-hover:text-emerald-400 transition-colors" : "text-zinc-600 group-hover:text-zinc-400 transition-colors"}>
         {icon}
       </span>
-      <span className="hidden sm:inline-block">./{children}.sh</span>
-      <span className="sm:hidden">{children}</span>
+      {label}
     </button>
   );
 }

@@ -50,27 +50,27 @@ export function ServerConsole() {
   return (
     <ScrollArea
       ref={scrollRef}
-      className="h-full p-2 font-mono text-sm"
+      className="h-full p-1.5 sm:p-2 font-mono text-[11px] sm:text-sm"
     >
       {logs.length === 0 ? (
-        <div className="text-muted-foreground text-center py-8">
+        <div className="text-muted-foreground text-center py-8 text-xs sm:text-sm">
           No log entries yet. Start the server to see activity.
         </div>
       ) : (
         logs.map((entry) => (
-          <div key={entry.id} className="flex items-start gap-2 py-0.5">
-            <span className="text-muted-foreground shrink-0 tabular-nums">
+          <div key={entry.id} className="flex items-start gap-1.5 sm:gap-2 py-0.5">
+            <span className="text-muted-foreground shrink-0 tabular-nums hidden sm:inline">
               {formatTime(entry.timestamp)}
             </span>
-            <Badge variant={levelVariant[entry.level]} className="shrink-0">
+            <Badge variant={levelVariant[entry.level]} className="shrink-0 text-[9px] sm:text-[10px]">
               {entry.level.toUpperCase()}
             </Badge>
             <span
-              className={`shrink-0 font-medium ${categoryColors[entry.category]}`}
+              className={`shrink-0 font-medium hidden sm:inline ${categoryColors[entry.category]}`}
             >
               [{entry.category}]
             </span>
-            <span className="text-zinc-300 break-all">{entry.message}</span>
+            <span className="text-zinc-300 break-words min-w-0">{entry.message}</span>
           </div>
         ))
       )}

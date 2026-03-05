@@ -32,16 +32,16 @@ export function ServerControls() {
   }, [isPublic, setPublic]);
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
       <button
         onClick={copyAddress}
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-colors ${
+        className={`flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-md border text-[11px] sm:text-xs font-mono transition-colors min-w-0 ${
           isRunning
             ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
             : "border-border bg-muted/50 text-muted-foreground hover:bg-muted"
         }`}
       >
-        <span className="truncate max-w-[200px]">{address}</span>
+        <span className="truncate max-w-[140px] sm:max-w-[200px]">{address}</span>
         {copied ? (
           <Check className="h-3 w-3 flex-shrink-0 text-emerald-400" />
         ) : (
@@ -53,7 +53,7 @@ export function ServerControls() {
         <button
           onClick={togglePublic}
           title={isPublic ? "Listed publicly — click to make private" : "Private — click to list publicly"}
-          className={`flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs transition-all ${
+          className={`flex items-center gap-1 px-2 py-1 rounded-md border text-xs transition-all ${
             isPublic
               ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.15)]"
               : "border-zinc-700 bg-zinc-800/50 text-zinc-500 hover:text-zinc-300 hover:border-zinc-600"
@@ -65,13 +65,14 @@ export function ServerControls() {
       )}
 
       {!isRunning ? (
-        <Button onClick={start} disabled={isBusy} size="sm">
-          <Play className="h-4 w-4" />
-          Start Server
+        <Button onClick={start} disabled={isBusy} size="sm" className="text-xs">
+          <Play className="h-3.5 w-3.5" />
+          <span className="hidden xs:inline">Start</span>
+          <span className="xs:hidden">Start</span>
         </Button>
       ) : (
-        <Button onClick={stop} variant="destructive" size="sm">
-          <Square className="h-4 w-4" />
+        <Button onClick={stop} variant="destructive" size="sm" className="text-xs">
+          <Square className="h-3.5 w-3.5" />
           Stop
         </Button>
       )}
