@@ -9,7 +9,7 @@ const DIORITE: u32 = 4u;
 const POLISHED_DIORITE: u32 = 5u;
 const ANDESITE: u32 = 6u;
 const POLISHED_ANDESITE: u32 = 7u;
-const GRASS_BLOCK: u32 = 8u;
+const GRASS_BLOCK: u32 = 9u; // 8 = snowy=true
 const DIRT: u32 = 10u;
 const COARSE_DIRT: u32 = 11u;
 const COBBLESTONE: u32 = 14u;

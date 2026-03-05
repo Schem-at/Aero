@@ -3,7 +3,7 @@ import type { WorldGenerator, ChunkData } from "@/types/plugin";
 // Block state IDs (PrismarineJS 1.21.9)
 const AIR = 0;
 const STONE = 1;
-const GRASS_BLOCK = 8;
+const GRASS_BLOCK = 9; // snowy=false (8 = snowy=true)
 const DIRT = 10;
 const BEDROCK = 85;
 const RED_CONCRETE = 14842;

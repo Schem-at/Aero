@@ -311,6 +311,16 @@ function onPlayerJoined(newSession: ClientSession): void {
     return combined;
   });
 
+  // Send the new player their own skin metadata (for 3rd person / inventory rendering)
+  try {
+    const selfMeta = new Uint8Array(wasmModule.build_entity_metadata(
+      newSession.connectionId, newSession.entityId, newSkinParts
+    ));
+    if (selfMeta.length > 0) {
+      newSession.stream.write(selfMeta).catch(() => {});
+    }
+  } catch {}
+
   // Tell the new player about all existing players
   for (const [, other] of sessions) {
     if (other.connectionId === newSession.connectionId) continue;
@@ -785,15 +795,13 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         }
       }
 
-      // Check for block events (break/place) and broadcast to all players
+      // Check for block events (break/place) and broadcast to ALL players (including self)
       if (playerJoined) {
         const blockEventsStr = wasmModule.get_pending_block_events(connectionId) as string;
         if (blockEventsStr) {
           const events = JSON.parse(blockEventsStr) as { x: number; y: number; z: number; block_state: number }[];
           for (const evt of events) {
-            // Broadcast Block Update to ALL other players
             for (const [, other] of sessions) {
-              if (other.connectionId === connectionId) continue;
               if (!other.inPlay) continue;
               try {
                 const bytes = new Uint8Array(
@@ -822,11 +830,17 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         }
       }
 
-      // Check for skin parts changes and broadcast entity metadata
+      // Check for skin parts changes and broadcast entity metadata (including self)
       if (playerJoined) {
         if (wasmModule.get_skin_parts_dirty(connectionId)) {
           wasmModule.clear_skin_parts_dirty(connectionId);
           const skinParts = wasmModule.get_skin_parts(connectionId) as number;
+          // Send to self
+          try {
+            const selfMeta = new Uint8Array(wasmModule.build_entity_metadata(connectionId, session.entityId, skinParts));
+            if (selfMeta.length > 0) session.stream.write(selfMeta).catch(() => {});
+          } catch {}
+          // Send to others
           broadcastExcept(connectionId, (targetId) => {
             return new Uint8Array(wasmModule.build_entity_metadata(targetId, session.entityId, skinParts));
           });
