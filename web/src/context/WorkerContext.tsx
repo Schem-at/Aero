@@ -78,11 +78,18 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
     setStatus("initializing");
     addLog("info", "system", "Starting server worker...");
 
-    const certHash = import.meta.env.VITE_CERT_HASH || "";
-    const wtPort = import.meta.env.VITE_WT_PORT || "4433";
-    const wtHost = import.meta.env.VITE_WT_HOST || window.location.hostname;
-    const wtUrl = `https://${wtHost}:${wtPort}/connect`;
-    bridge.start(wtUrl, certHash, config, config.subdomain);
+    // Fetch runtime config (cert hash, WT port) from the server
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((cfg: { certHash: string; wtPort: number }) => {
+        const wtHost = window.location.hostname;
+        const wtUrl = `https://${wtHost}:${cfg.wtPort}/connect`;
+        bridge.start(wtUrl, cfg.certHash, config, config.subdomain);
+      })
+      .catch((err) => {
+        setError(`Failed to fetch server config: ${err}`);
+        addLog("error", "system", `Failed to fetch server config: ${err}`);
+      });
   }, [getBridge, addLog, pushStats, pushPacketLog, setStatus, setError, setAssignedRoom, config]);
 
   const stop = useCallback(() => {

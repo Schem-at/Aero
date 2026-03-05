@@ -12,15 +12,6 @@ export default defineConfig({
   },
   worker: {
     format: "es",
-    rollupOptions: {
-      output: {
-        entryFileNames: "assets/[name]-[hash].js",
-      },
-    },
-  },
-  build: {
-    minify: false,
-    sourcemap: true,
   },
   server: {
     port: 5555,
@@ -40,6 +31,10 @@ export default defineConfig({
         changeOrigin: true,
       },
       "/api/auth": {
+        target: "http://localhost:9090",
+        changeOrigin: true,
+      },
+      "/api/config": {
         target: "http://localhost:9090",
         changeOrigin: true,
       },

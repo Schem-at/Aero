@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"io"
@@ -131,8 +134,25 @@ func main() {
 		apiMux.Handle("/api/proxy/stats", apiLimiter.HTTPMiddleware(statsHandler))
 	}
 
+	// Compute cert hash for WebTransport (browsers need this for self-signed certs)
+	certHashB64 := computeCertHash(*cert)
+	if certHashB64 != "" {
+		log.Printf("web: cert hash (base64): %s", certHashB64)
+	}
+
 	serversHandler := apiLimiter.HTTPMiddlewareFunc(publicServersHandler(*domain, *port))
 	apiMux.HandleFunc("/api/servers", serversHandler)
+
+	// Cert hash + WebTransport config (also served on API port for dev mode)
+	apiMux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"certHash": certHashB64,
+			"wtPort":   *wtPort,
+			"domain":   *domain,
+			"tcpPort":  *port,
+		})
+	})
 
 	apiMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -158,7 +178,7 @@ func main() {
 	if *webDir != "" {
 		webServer = &http.Server{
 			Addr:         fmt.Sprintf(":%d", *webPort),
-			Handler:      webHandler(*webDir, database, jwtSecret, *domain, *port),
+			Handler:      webHandler(*webDir, database, jwtSecret, *domain, *port, certHashB64, *wtPort),
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 30 * time.Second,
 			IdleTimeout:  120 * time.Second,
@@ -212,7 +232,7 @@ func main() {
 
 // webHandler builds an HTTP handler that serves static files with SPA fallback,
 // proxies /api/mojang/ to Mojang's session server, and adds gzip-friendly headers.
-func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tcpPort int) http.Handler {
+func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tcpPort int, certHash string, wtPort int) http.Handler {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		log.Fatalf("web: invalid directory %q: %v", dir, err)
@@ -255,6 +275,17 @@ func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tc
 
 	// Public server list (no auth)
 	mux.HandleFunc("/api/servers", webAPILimiter.HTTPMiddlewareFunc(publicServersHandler(domain, tcpPort)))
+
+	// Cert hash + WebTransport config for browser clients
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"certHash": certHash,
+			"wtPort":   wtPort,
+			"domain":   domain,
+			"tcpPort":  tcpPort,
+		})
+	})
 
 	// Static files with SPA fallback
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +331,23 @@ func publicServersHandler(domain string, tcpPort int) http.HandlerFunc {
 		}
 		json.NewEncoder(w).Encode(servers)
 	}
+}
+
+// computeCertHash returns the base64-encoded SHA-256 hash of the DER-encoded certificate.
+// This is needed for WebTransport serverCertificateHashes with self-signed certs.
+func computeCertHash(certFile string) string {
+	data, err := os.ReadFile(certFile)
+	if err != nil {
+		log.Printf("web: cannot read cert for hash: %v", err)
+		return ""
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		log.Printf("web: cannot decode PEM cert")
+		return ""
+	}
+	hash := sha256.Sum256(block.Bytes)
+	return base64.StdEncoding.EncodeToString(hash[:])
 }
 
 // setCacheHeaders sets Cache-Control for static assets.
