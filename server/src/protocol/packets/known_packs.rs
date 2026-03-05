@@ -20,7 +20,7 @@ impl PacketHandler for KnownPacksHandler {
 
         // 1. Send all Registry Data packets (0x07)
         ctx.log(LogLevel::Info, LogCategory::Protocol, "Sending registry data...");
-        response.extend_from_slice(&build_all_registry_packets(threshold));
+        response.extend_from_slice(&build_all_registry_packets(threshold, ctx.server_config));
 
         // 2. Send server brand via Plugin Message (0x01)
         let mut brand_payload = Vec::new();

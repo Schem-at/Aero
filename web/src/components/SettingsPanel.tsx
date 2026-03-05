@@ -1,8 +1,16 @@
-import { useRef, useCallback } from "react";
+import { useRef, useState, useCallback } from "react";
 import { useServerConfig, generateSubdomain } from "@/context/ServerConfigContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ImagePlus, Trash2, RefreshCw } from "lucide-react";
+import { ImagePlus, Trash2, RefreshCw, Plus, X, Shield, Eye, Palette } from "lucide-react";
+
+function intToHex(n: number): string {
+  return "#" + (n & 0xFFFFFF).toString(16).padStart(6, "0");
+}
+
+function hexToInt(hex: string): number {
+  return parseInt(hex.replace("#", ""), 16) || 0;
+}
 
 /**
  * Resize an image file to 64x64 PNG and return a `data:image/png;base64,...` string.
@@ -186,9 +194,152 @@ export function SettingsPanel() {
         </Field>
       </div>
 
+      {/* Render Distance */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+          <label className="text-sm font-medium">Render Distance</label>
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums font-mono">
+            {config.render_distance} chunks
+          </span>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          How far clients can see (2–32). Higher values send more chunks.
+        </p>
+        <input
+          type="range"
+          min={2}
+          max={32}
+          value={config.render_distance}
+          onChange={(e) => updateConfig({ render_distance: parseInt(e.target.value) })}
+          className="w-full accent-primary h-1.5"
+        />
+        <div className="flex justify-between text-[10px] text-muted-foreground tabular-nums">
+          <span>2</span>
+          <span>32</span>
+        </div>
+      </div>
+
+      {/* Fog & Sky Colors */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Palette className="h-3.5 w-3.5 text-muted-foreground" />
+          <label className="text-sm font-medium">Environment Colors</label>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Fog and sky colors seen by players. Takes effect on next connection.
+        </p>
+        <div className="flex gap-4">
+          <ColorField
+            label="Fog"
+            value={config.fog_color}
+            onChange={(v) => updateConfig({ fog_color: v })}
+          />
+          <ColorField
+            label="Sky"
+            value={config.sky_color}
+            onChange={(v) => updateConfig({ sky_color: v })}
+          />
+        </div>
+      </div>
+
+      {/* Whitelist */}
+      <WhitelistSection />
+
       <p className="text-[11px] text-muted-foreground">
         Changes are saved to localStorage and persist across sessions.
       </p>
+    </div>
+  );
+}
+
+function WhitelistSection() {
+  const { config, updateConfig } = useServerConfig();
+  const [input, setInput] = useState("");
+
+  const addPlayer = useCallback(() => {
+    const name = input.trim();
+    if (!name) return;
+    if (config.whitelist.some((w) => w.toLowerCase() === name.toLowerCase())) {
+      setInput("");
+      return;
+    }
+    updateConfig({ whitelist: [...config.whitelist, name] });
+    setInput("");
+  }, [input, config.whitelist, updateConfig]);
+
+  const removePlayer = useCallback(
+    (name: string) => {
+      updateConfig({ whitelist: config.whitelist.filter((w) => w !== name) });
+    },
+    [config.whitelist, updateConfig]
+  );
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Shield className="h-3.5 w-3.5 text-muted-foreground" />
+          <label className="text-sm font-medium">Whitelist</label>
+        </div>
+        <button
+          onClick={() => updateConfig({ whitelist_enabled: !config.whitelist_enabled })}
+          className={`relative w-9 h-5 rounded-full transition-colors ${
+            config.whitelist_enabled ? "bg-emerald-500" : "bg-zinc-700"
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+              config.whitelist_enabled ? "translate-x-4" : ""
+            }`}
+          />
+        </button>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        When enabled, only listed players can join
+      </p>
+
+      {config.whitelist_enabled && (
+        <div className="space-y-2 pt-1">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addPlayer()}
+              placeholder="Player username"
+              className="flex-1 px-3 py-1.5 text-sm bg-muted border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+            />
+            <Button variant="outline" size="sm" onClick={addPlayer} className="text-xs">
+              <Plus className="h-3 w-3" />
+              Add
+            </Button>
+          </div>
+
+          {config.whitelist.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {config.whitelist.map((name) => (
+                <span
+                  key={name}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted border border-border text-xs font-mono"
+                >
+                  {name}
+                  <button
+                    onClick={() => removePlayer(name)}
+                    className="text-muted-foreground hover:text-red-400 transition-colors"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted-foreground italic">
+              No players added — nobody will be able to join
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -258,6 +409,31 @@ function SignalBars() {
       <rect x="10" y="4" width="4" height="12" rx="0.5" fill="#5ced5c" />
       <rect x="15" y="0" width="4" height="16" rx="0.5" fill="#5ced5c" />
     </svg>
+  );
+}
+
+function ColorField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <label className="text-xs text-muted-foreground w-8">{label}</label>
+      <input
+        type="color"
+        value={intToHex(value)}
+        onChange={(e) => onChange(hexToInt(e.target.value))}
+        className="w-8 h-8 rounded border border-border cursor-pointer bg-transparent p-0.5"
+      />
+      <span className="text-[11px] text-muted-foreground font-mono">
+        {intToHex(value)}
+      </span>
+    </div>
   );
 }
 

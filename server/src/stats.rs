@@ -8,7 +8,21 @@ pub struct ServerConfig {
     pub version_name: String,
     #[serde(default)]
     pub favicon: Option<String>,
+    #[serde(default)]
+    pub whitelist_enabled: bool,
+    #[serde(default)]
+    pub whitelist: Vec<String>,
+    #[serde(default = "default_render_distance")]
+    pub render_distance: u8,
+    #[serde(default = "default_fog_color")]
+    pub fog_color: i32,
+    #[serde(default = "default_sky_color")]
+    pub sky_color: i32,
 }
+
+fn default_render_distance() -> u8 { 10 }
+fn default_fog_color() -> i32 { 12638463 }  // 0xC0D8FF
+fn default_sky_color() -> i32 { 7907327 }   // 0x78A7FF
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -17,6 +31,11 @@ impl Default for ServerConfig {
             max_players: 20,
             version_name: "WASM 1.21".to_string(),
             favicon: None,
+            whitelist_enabled: false,
+            whitelist: Vec::new(),
+            render_distance: default_render_distance(),
+            fog_color: default_fog_color(),
+            sky_color: default_sky_color(),
         }
     }
 }

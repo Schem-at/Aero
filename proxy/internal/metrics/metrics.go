@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+
 // ClientInfo represents a connected client visible in the API.
 type ClientInfo struct {
 	ID          string  `json:"id"`
@@ -58,7 +59,20 @@ type RoomMetrics struct {
 	RegisteredAt  time.Time    `json:"registered_at"`
 	ActiveClients int          `json:"active_clients"`
 	TotalClients  int          `json:"total_clients"`
+	Public        bool         `json:"public"`
+	MOTD          string       `json:"motd"`
+	Favicon       string       `json:"favicon,omitempty"`
 	Clients       []ClientInfo `json:"clients,omitempty"`
+}
+
+// PublicServer is the safe public-facing server info (no IPs or sensitive data).
+type PublicServer struct {
+	Name      string  `json:"name"`
+	MOTD      string  `json:"motd"`
+	Favicon   string  `json:"favicon,omitempty"`
+	Players   int     `json:"players"`
+	Address   string  `json:"address"`
+	UptimeSec float64 `json:"uptime_sec"`
 }
 
 // Snapshot is the JSON-serializable metrics response.
@@ -101,6 +115,56 @@ func (m *Metrics) RoomRemoved(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.rooms, name)
+}
+
+// SetRoomPublic sets the public visibility of a room.
+func (m *Metrics) SetRoomPublic(name string, public bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rm, ok := m.rooms[name]; ok {
+		rm.Public = public
+	}
+}
+
+// SetRoomMOTD sets the MOTD of a room.
+func (m *Metrics) SetRoomMOTD(name string, motd string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rm, ok := m.rooms[name]; ok {
+		rm.MOTD = motd
+	}
+}
+
+// SetRoomFavicon sets the favicon (base64 data URI) of a room.
+func (m *Metrics) SetRoomFavicon(name string, favicon string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rm, ok := m.rooms[name]; ok {
+		rm.Favicon = favicon
+	}
+}
+
+// PublicServers returns a list of publicly visible servers with safe fields only.
+func (m *Metrics) PublicServers(domain string, tcpPort int) []PublicServer {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	now := time.Now()
+	var servers []PublicServer
+	for _, rm := range m.rooms {
+		if !rm.Public {
+			continue
+		}
+		servers = append(servers, PublicServer{
+			Name:      rm.Name,
+			MOTD:      rm.MOTD,
+			Favicon:   rm.Favicon,
+			Players:   rm.ActiveClients,
+			Address:   fmt.Sprintf("%s.%s:%d", rm.Name, domain, tcpPort),
+			UptimeSec: now.Sub(rm.RegisteredAt).Seconds(),
+		})
+	}
+	return servers
 }
 
 // BridgeStarted records a new TCP↔WT bridge and returns a client ID.
@@ -229,18 +293,11 @@ func (m *Metrics) Snapshot() *Snapshot {
 	}
 }
 
-// Handler returns an HTTP handler that serves the JSON API.
-func Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/proxy/stats", func(w http.ResponseWriter, r *http.Request) {
+// StatsHandler returns an http.HandlerFunc that serves the stats JSON.
+func StatsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		json.NewEncoder(w).Encode(global.Snapshot())
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintln(w, "Aero Proxy — API server")
-		fmt.Fprintln(w, "GET /api/proxy/stats for metrics JSON")
-	})
-	return mux
+	}
 }

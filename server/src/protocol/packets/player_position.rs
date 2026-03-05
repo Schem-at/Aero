@@ -30,18 +30,14 @@ impl PacketHandler for PlayerPositionHandler {
             *ctx.player_chunk_x = chunk_x;
             *ctx.player_chunk_z = chunk_z;
 
-            // Build Update View Position (0x5C) packet + Chunk Batch Start (0x0C)
+            // Build Update View Position (0x5C) only — Chunk Batch Start is sent
+            // by the worker through the chunk queue to avoid nested batch starts
+            // when the player moves faster than chunks can be generated.
             let threshold = ctx.compression_threshold.unwrap_or(256);
-            let mut response = Vec::new();
-
-            // Update View Position — tells client to center chunk loading
             let mut view_pos = Vec::new();
             view_pos.extend_from_slice(&write_varint(chunk_x));
             view_pos.extend_from_slice(&write_varint(chunk_z));
-            response.extend_from_slice(&compress_packet(0x5C, &view_pos, threshold));
-
-            // Chunk Batch Start
-            response.extend_from_slice(&compress_packet(0x0C, &[], threshold));
+            let response = compress_packet(0x5C, &view_pos, threshold);
 
             // Signal that chunks need to be sent for new center
             *ctx.pending_chunk_center = Some((chunk_x, chunk_z));

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useAuth } from "@/context/AuthContext";
 import { Card } from "@/components/ui/card";
 import {
   Clock,
@@ -77,6 +78,7 @@ function formatDuration(s: number): string {
 }
 
 export function ProxyDashboard() {
+  const { token, logout } = useAuth();
   const [stats, setStats] = useState<ProxyStats | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,7 +96,13 @@ export function ProxyDashboard() {
 
   const poll = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/api/proxy/stats`);
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`${apiBase}/api/proxy/stats`, { headers });
+      if (res.status === 401) {
+        logout();
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: ProxyStats = await res.json();
       setStats(data);
@@ -125,7 +133,7 @@ export function ProxyDashboard() {
       setConnected(false);
       setError(e instanceof Error ? e.message : "Connection failed");
     }
-  }, [apiBase]);
+  }, [apiBase, token, logout]);
 
   useEffect(() => {
     poll();

@@ -12,6 +12,11 @@ export interface ServerConfig {
   version_name: string;
   favicon: string | null;
   subdomain: string;
+  whitelist_enabled: boolean;
+  whitelist: string[];
+  render_distance: number;
+  fog_color: number;
+  sky_color: number;
 }
 
 const STORAGE_KEY = "mc-web-server-config";
@@ -40,6 +45,11 @@ const defaultConfig: ServerConfig = {
   version_name: "WASM 1.21",
   favicon: null,
   subdomain: generateSubdomain(),
+  whitelist_enabled: false,
+  whitelist: [],
+  render_distance: 10,
+  fog_color: 12638463,  // 0xC0D8FF
+  sky_color: 7907327,   // 0x78A7FF
 };
 
 function loadConfig(): ServerConfig {

@@ -9,13 +9,19 @@ export type MainToWorkerMessage =
   | { type: "queue_chat"; message: string }
   | { type: "chunk_data"; cx: number; cz: number; blockStates: Uint16Array }
   | { type: "chunk_batch_done"; count: number }
-  | { type: "regenerate_chunks" };
+  | { type: "regenerate_chunks" }
+  | { type: "set_public"; public: boolean };
 
 export interface WorkerServerConfig {
   motd: string;
   max_players: number;
   version_name: string;
   favicon: string | null;
+  whitelist_enabled: boolean;
+  whitelist: string[];
+  render_distance: number;
+  fog_color: number;
+  sky_color: number;
 }
 
 // Worker → Main messages

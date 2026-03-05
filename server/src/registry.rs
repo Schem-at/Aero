@@ -5,6 +5,7 @@
 use crate::compression::compress_packet;
 use crate::nbt::NbtWriter;
 use crate::protocol::types::{write_string, write_varint};
+use crate::stats::ServerConfig;
 
 /// Build a single Registry Data packet (0x07) payload.
 fn build_registry_packet(registry_id: &str, entries: &[(&str, Option<Vec<u8>>)]) -> Vec<u8> {
@@ -34,19 +35,15 @@ fn build_dimension_type_registry() -> Vec<u8> {
     let mut nbt = NbtWriter::new();
     nbt.byte("has_skylight", 1);
     nbt.byte("has_ceiling", 0);
-    nbt.byte("ultrawarm", 0);
-    nbt.byte("natural", 1);
     nbt.double("coordinate_scale", 1.0);
-    nbt.byte("bed_works", 1);
-    nbt.byte("respawn_anchor_works", 0);
     nbt.int("min_y", -64);
     nbt.int("height", 384);
     nbt.int("logical_height", 384);
     nbt.string("infiniburn", "#minecraft:infiniburn_overworld");
-    nbt.string("effects", "minecraft:overworld");
+    // "effects" was replaced with "skybox" + "cardinal_light" in protocol 774 (1.21.11)
+    nbt.string("skybox", "overworld");
+    nbt.string("cardinal_light", "default");
     nbt.float("ambient_light", 0.0);
-    nbt.byte("piglin_safe", 0);
-    nbt.byte("has_raids", 1);
     nbt.int("monster_spawn_light_level", 0);
     nbt.int("monster_spawn_block_light_limit", 0);
     let nbt_data = nbt.finish();
@@ -56,16 +53,16 @@ fn build_dimension_type_registry() -> Vec<u8> {
     ])
 }
 
-fn build_biome_registry() -> Vec<u8> {
+fn build_biome_registry(config: &ServerConfig) -> Vec<u8> {
     let mut nbt = NbtWriter::new();
     nbt.byte("has_precipitation", 1);
     nbt.float("temperature", 0.8);
     nbt.float("downfall", 0.4);
     nbt.begin_compound("effects");
-    nbt.int("fog_color", 12638463);
+    nbt.int("fog_color", config.fog_color);
     nbt.int("water_color", 4159204);
     nbt.int("water_fog_color", 329011);
-    nbt.int("sky_color", 7907327);
+    nbt.int("sky_color", config.sky_color);
     nbt.int("grass_color", 7842607);    // 0x77AB2F — plains grass
     nbt.int("foliage_color", 4764952);  // 0x48B518 — plains foliage
     nbt.begin_compound("mood_sound");
@@ -229,12 +226,12 @@ fn build_zombie_nautilus_variant_registry() -> Vec<u8> {
 }
 
 /// Build all registry data as concatenated compressed packets.
-pub fn build_all_registry_packets(threshold: i32) -> Vec<u8> {
+pub fn build_all_registry_packets(threshold: i32, config: &ServerConfig) -> Vec<u8> {
     let mut result = Vec::new();
 
     let registries = vec![
         build_dimension_type_registry(),
-        build_biome_registry(),
+        build_biome_registry(config),
         build_damage_type_registry(),
         build_painting_variant_registry(),
         // Animal variant registries (must be non-empty in protocol 774)
@@ -298,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_all_registries_produce_bytes() {
-        let result = build_all_registry_packets(256);
+        let result = build_all_registry_packets(256, &ServerConfig::default());
         // Should be non-empty — contains at least 14 registry packets
         assert!(result.len() > 100);
     }

@@ -3,13 +3,14 @@ import { Button } from "@/components/ui/button";
 import { useServer } from "@/context/ServerContext";
 import { useServerConfig } from "@/context/ServerConfigContext";
 import { useWorker } from "@/context/WorkerContext";
-import { Play, Square, Copy, Check } from "lucide-react";
+import { Play, Square, Copy, Check, Globe, Lock } from "lucide-react";
 
 export function ServerControls() {
   const { status, assignedRoom } = useServer();
   const { config } = useServerConfig();
-  const { start, stop } = useWorker();
+  const { start, stop, setPublic } = useWorker();
   const [copied, setCopied] = useState(false);
+  const [isPublic, setIsPublic] = useState(false);
 
   const isRunning = status === "running";
   const isBusy = status === "initializing";
@@ -24,6 +25,12 @@ export function ServerControls() {
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }, [address]);
+
+  const togglePublic = useCallback(() => {
+    const next = !isPublic;
+    setIsPublic(next);
+    setPublic(next);
+  }, [isPublic, setPublic]);
 
   return (
     <div className="flex items-center gap-2">
@@ -42,6 +49,21 @@ export function ServerControls() {
           <Copy className="h-3 w-3 flex-shrink-0" />
         )}
       </button>
+
+      {isRunning && (
+        <button
+          onClick={togglePublic}
+          title={isPublic ? "Listed publicly — click to make private" : "Private — click to list publicly"}
+          className={`flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs transition-all ${
+            isPublic
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.15)]"
+              : "border-zinc-700 bg-zinc-800/50 text-zinc-500 hover:text-zinc-300 hover:border-zinc-600"
+          }`}
+        >
+          {isPublic ? <Globe className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+          <span className="hidden sm:inline">{isPublic ? "Public" : "Private"}</span>
+        </button>
+      )}
 
       {!isRunning ? (
         <Button onClick={start} disabled={isBusy} size="sm">

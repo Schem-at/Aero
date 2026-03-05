@@ -85,6 +85,28 @@ mod wasm_exports {
         });
     }
 
+    /// Build a Login Disconnect packet with the given JSON reason string.
+    /// Encrypted if cipher is active (which it is after Encryption Response).
+    /// Compression is NOT yet active at this point (set in complete_auth).
+    #[wasm_bindgen]
+    pub fn build_disconnect(reason_json: &str) -> Vec<u8> {
+        use crate::protocol::types::write_string;
+        use crate::protocol::packet::frame_packet;
+
+        CONNECTION.with(|c| {
+            let mut conn = c.borrow_mut();
+            let payload = write_string(reason_json);
+            let data = frame_packet(0x00, &payload);
+            if let Some(ref mut cipher) = conn.cipher {
+                let mut encrypted = data;
+                cipher.encrypt(&mut encrypted);
+                encrypted
+            } else {
+                data
+            }
+        })
+    }
+
     /// Update server configuration (MOTD, max players, etc.) from JSON.
     #[wasm_bindgen]
     pub fn set_server_config(json: &str) {
@@ -112,7 +134,8 @@ mod wasm_exports {
                 ("00000000000000000000000000000000", "Player", &[][..])
             };
             let fly_speed = conn.fly_speed;
-            let data = crate::world::build_play_init(1, threshold, uuid, username, properties, fly_speed);
+            let view_dist = conn.server_config.render_distance as i32;
+            let data = crate::world::build_play_init(1, threshold, uuid, username, properties, fly_speed, view_dist);
             conn.awaiting_chunks = true;
             if let Some(ref mut cipher) = conn.cipher {
                 let mut encrypted = data;
@@ -152,6 +175,24 @@ mod wasm_exports {
             let threshold = conn.compression_threshold.unwrap_or(256);
             let data = crate::world::build_play_finish(chunk_count, threshold);
             conn.awaiting_chunks = false;
+            if let Some(ref mut cipher) = conn.cipher {
+                let mut encrypted = data;
+                cipher.encrypt(&mut encrypted);
+                encrypted
+            } else {
+                data
+            }
+        })
+    }
+
+    /// Build a Chunk Batch Start packet (0x0C, empty payload).
+    /// Returns encrypted bytes ready for the wire.
+    #[wasm_bindgen]
+    pub fn chunk_batch_start() -> Vec<u8> {
+        CONNECTION.with(|c| {
+            let mut conn = c.borrow_mut();
+            let threshold = conn.compression_threshold.unwrap_or(256);
+            let data = crate::compression::compress_packet(0x0C, &[], threshold);
             if let Some(ref mut cipher) = conn.cipher {
                 let mut encrypted = data;
                 cipher.encrypt(&mut encrypted);

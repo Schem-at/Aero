@@ -18,6 +18,7 @@ interface WorkerContextValue {
   stop: () => void;
   queueChat: (message: string) => void;
   regenerateChunks: () => void;
+  setPublic: (isPublic: boolean) => void;
 }
 
 const WorkerContext = createContext<WorkerContextValue | null>(null);
@@ -98,6 +99,10 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
     bridgeRef.current?.regenerateChunks();
   }, []);
 
+  const setPublic = useCallback((isPublic: boolean) => {
+    bridgeRef.current?.setPublic(isPublic);
+  }, []);
+
   // Push config changes to worker
   useEffect(() => {
     bridgeRef.current?.setConfig(config);
@@ -111,7 +116,7 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <WorkerContext.Provider value={{ start, stop, queueChat, regenerateChunks }}>
+    <WorkerContext.Provider value={{ start, stop, queueChat, regenerateChunks, setPublic }}>
       {children}
     </WorkerContext.Provider>
   );

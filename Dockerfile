@@ -34,7 +34,7 @@ RUN CGO_ENABLED=0 go build -o /proxy-bin ./cmd/proxy
 
 # Stage 4: Runtime (minimal — Go binary serves everything)
 FROM alpine:3.21
-RUN apk add --no-cache openssl ca-certificates
+RUN apk add --no-cache openssl ca-certificates wget
 
 COPY --from=web-builder /app/web/dist /var/www/html
 COPY --from=go-builder /proxy-bin /usr/local/bin/proxy

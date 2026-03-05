@@ -17,6 +17,11 @@ WT_PORT="${WT_PORT:-4433}"
 DOMAIN="${DOMAIN:-localhost}"
 WEB_PORT="${WEB_PORT:-5555}"
 
+# Local auth defaults — uses in-memory SQLite when DB_PATH is not set
+export ADMIN_USER="${ADMIN_USER:-admin}"
+export ADMIN_PASS="${ADMIN_PASS:-admin}"
+export JWT_SECRET="${JWT_SECRET:-dev-secret-do-not-use-in-production!!}"
+
 cleanup() {
   echo ""
   echo "==> Shutting down..."

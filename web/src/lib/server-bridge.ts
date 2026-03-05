@@ -101,6 +101,10 @@ export class ServerBridge {
     this.send({ type: "regenerate_chunks" });
   }
 
+  setPublic(isPublic: boolean): void {
+    this.send({ type: "set_public", public: isPublic });
+  }
+
   private send(msg: MainToWorkerMessage): void {
     this.worker?.postMessage(msg);
   }

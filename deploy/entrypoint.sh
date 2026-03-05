@@ -1,6 +1,9 @@
 #!/bin/sh
 set -e
 
+# Ensure data directory exists for SQLite
+mkdir -p /data
+
 CERT_DIR="/etc/aero/certs"
 CERT_FILE="$CERT_DIR/cert.pem"
 KEY_FILE="$CERT_DIR/key.pem"

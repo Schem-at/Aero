@@ -8,28 +8,42 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/user/minecraft-web/proxy/internal/bridge"
 	"github.com/user/minecraft-web/proxy/internal/metrics"
+	"github.com/user/minecraft-web/proxy/internal/ratelimit"
 	"github.com/user/minecraft-web/proxy/internal/router"
+)
+
+const (
+	maxConcurrentConns = 1000
+	connReadTimeout    = 10 * time.Second  // timeout for handshake reads
+	connIdleTimeout    = 30 * time.Second  // timeout for idle pre-bridge connections
 )
 
 // Listener accepts incoming Minecraft client TCP connections.
 type Listener struct {
-	Addr   string
-	Domain string
-	Router *router.Router
+	Addr    string
+	Domain  string
+	Router  *router.Router
+	limiter *ratelimit.Limiter
+	active  atomic.Int64
 }
 
 // ListenAndServe starts accepting TCP connections.
 func (l *Listener) ListenAndServe(ctx context.Context) error {
+	// 10 new connections per second per IP, burst of 20
+	l.limiter = ratelimit.New(10, 20)
+
 	ln, err := net.Listen("tcp", l.Addr)
 	if err != nil {
 		return fmt.Errorf("tcp listen: %w", err)
 	}
 	defer ln.Close()
 
-	log.Printf("tcp: listening on %s", l.Addr)
+	log.Printf("tcp: listening on %s (max %d concurrent)", l.Addr, maxConcurrentConns)
 
 	go func() {
 		<-ctx.Done()
@@ -47,12 +61,39 @@ func (l *Listener) ListenAndServe(ctx context.Context) error {
 				continue
 			}
 		}
-		go l.handleConn(ctx, conn)
+
+		// Extract IP for rate limiting
+		ip := ""
+		if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+			ip = host
+		}
+
+		// Enforce per-IP rate limit
+		if !l.limiter.Allow(ip) {
+			conn.Close()
+			continue
+		}
+
+		// Enforce global connection limit
+		if l.active.Load() >= maxConcurrentConns {
+			log.Printf("tcp: rejecting connection from %s (at capacity)", ip)
+			conn.Close()
+			continue
+		}
+
+		l.active.Add(1)
+		go func() {
+			defer l.active.Add(-1)
+			l.handleConn(ctx, conn)
+		}()
 	}
 }
 
 func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+
+	// Set deadline for the handshake phase
+	conn.SetDeadline(time.Now().Add(connReadTimeout))
 
 	// Extract client IP
 	clientIP := ""
@@ -120,6 +161,9 @@ func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
+
+	// Clear deadline — bridge handles its own I/O
+	conn.SetDeadline(time.Time{})
 
 	// Register client and get byte counters
 	clientID := m.BridgeStarted(subdomain, username, clientIP)

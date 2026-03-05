@@ -9,6 +9,9 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"regexp"
+	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
@@ -16,6 +19,15 @@ import (
 	"github.com/user/minecraft-web/proxy/internal/metrics"
 	"github.com/user/minecraft-web/proxy/internal/router"
 )
+
+const (
+	maxRooms    = 200  // max concurrent WebTransport rooms
+	maxMOTDLen  = 256  // max MOTD length in characters
+	maxRoomLen  = 32   // max room name length
+)
+
+// validRoomName allows lowercase alphanumeric + hyphens, no leading/trailing hyphen.
+var validRoomName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$`)
 
 var adjectives = []string{
 	"brave", "calm", "dark", "eager", "fast",
@@ -35,25 +47,54 @@ func generateName() string {
 
 func randomSuffix() string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, 3)
+	b := make([]byte, 4)
 	for i := range b {
 		b[i] = chars[rand.Intn(len(chars))]
 	}
 	return string(b)
 }
 
+func sanitizeRoomName(name string) string {
+	if len(name) > maxRoomLen {
+		name = name[:maxRoomLen]
+	}
+	if !validRoomName.MatchString(name) {
+		return ""
+	}
+	return name
+}
+
+func truncateMOTD(motd string) string {
+	if utf8.RuneCountInString(motd) > maxMOTDLen {
+		runes := []rune(motd)
+		return string(runes[:maxMOTDLen])
+	}
+	return motd
+}
+
 // Server handles incoming WebTransport connections from browser hosts.
 type Server struct {
-	Addr      string
-	TLSCert   string
-	TLSKey    string
-	Router    *router.Router
-	wtServer  *webtransport.Server
+	Addr       string
+	TLSCert    string
+	TLSKey     string
+	Router     *router.Router
+	wtServer   *webtransport.Server
+	activeRooms atomic.Int64
 }
 
 // registration is the JSON sent by the browser on the control stream.
 type registration struct {
-	Room string `json:"room"`
+	Room    string `json:"room"`
+	Public  bool   `json:"public,omitempty"`
+	MOTD    string `json:"motd,omitempty"`
+	Favicon string `json:"favicon,omitempty"`
+}
+
+// roomUpdate is a JSON message sent on the control stream to update room settings.
+type roomUpdate struct {
+	Public  *bool   `json:"public,omitempty"`
+	MOTD    *string `json:"motd,omitempty"`
+	Favicon *string `json:"favicon,omitempty"`
 }
 
 // ListenAndServe starts the WebTransport server.
@@ -110,6 +151,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 func (s *Server) handleSession(ctx context.Context, session *webtransport.Session) {
 	defer session.CloseWithError(0, "session ended")
 
+	// Enforce max rooms
+	if s.activeRooms.Load() >= maxRooms {
+		log.Printf("wt: rejecting session (at room capacity %d)", maxRooms)
+		return
+	}
+
 	// Read registration from the first bidirectional stream (control stream)
 	stream, err := session.AcceptStream(ctx)
 	if err != nil {
@@ -117,25 +164,29 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 		return
 	}
 
+	// Limit registration message size (16KB max)
+	limitedReader := &io.LimitedReader{R: stream, N: 16384}
 	var reg registration
-	decoder := json.NewDecoder(stream)
+	decoder := json.NewDecoder(limitedReader)
 	if err := decoder.Decode(&reg); err != nil {
 		log.Printf("wt: read registration failed: %v", err)
 		stream.Close()
 		return
 	}
 
-	preferred := reg.Room
+	// Sanitize inputs
+	preferred := sanitizeRoomName(reg.Room)
 	if preferred == "" {
 		preferred = generateName()
 	}
+	reg.MOTD = truncateMOTD(reg.MOTD)
 
-	// Try to register with the preferred name, then with suffixes
+	// Try to register with the preferred name, then with suffixes (TryRegister only)
 	sess := &router.Session{WT: session}
 	assigned := preferred
 	if !s.Router.TryRegister(assigned, sess) {
 		registered := false
-		for i := 0; i < 5; i++ {
+		for i := 0; i < 10; i++ {
 			assigned = preferred + "-" + randomSuffix()
 			if s.Router.TryRegister(assigned, sess) {
 				registered = true
@@ -143,20 +194,67 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 			}
 		}
 		if !registered {
-			assigned = generateName() + "-" + randomSuffix()
-			s.Router.Register(assigned, sess)
+			// Generate fully random name — still use TryRegister to never overwrite
+			for i := 0; i < 10; i++ {
+				assigned = generateName() + "-" + randomSuffix()
+				if s.Router.TryRegister(assigned, sess) {
+					registered = true
+					break
+				}
+			}
+			if !registered {
+				log.Printf("wt: failed to find available room name after retries")
+				json.NewEncoder(stream).Encode(map[string]string{"status": "error", "error": "no room name available"})
+				stream.Close()
+				return
+			}
 		}
 	}
 
-	log.Printf("wt: session registered for room %q (requested %q)", assigned, preferred)
+	s.activeRooms.Add(1)
+	log.Printf("wt: session registered for room %q (requested %q) [%d active]", assigned, preferred, s.activeRooms.Load())
 	metrics.Get().RoomRegistered(assigned)
+	if reg.Public {
+		metrics.Get().SetRoomPublic(assigned, true)
+	}
+	if reg.MOTD != "" {
+		metrics.Get().SetRoomMOTD(assigned, reg.MOTD)
+	}
+	if reg.Favicon != "" {
+		metrics.Get().SetRoomFavicon(assigned, reg.Favicon)
+	}
 	defer func() {
 		s.Router.Remove(assigned)
 		metrics.Get().RoomRemoved(assigned)
+		s.activeRooms.Add(-1)
 	}()
 
 	// Send confirmation back on control stream with the actually assigned name
 	json.NewEncoder(stream).Encode(map[string]string{"status": "ok", "room": assigned})
+
+	// Listen for update messages on the control stream
+	// Use a fresh limited-reader decoder for updates
+	updateDecoder := json.NewDecoder(&io.LimitedReader{R: stream, N: 1 << 20}) // 1MB total for all updates
+	go func() {
+		for {
+			var update roomUpdate
+			if err := updateDecoder.Decode(&update); err != nil {
+				return
+			}
+			if update.Public != nil {
+				metrics.Get().SetRoomPublic(assigned, *update.Public)
+				log.Printf("wt: room %q public=%v", assigned, *update.Public)
+			}
+			if update.MOTD != nil {
+				motd := truncateMOTD(*update.MOTD)
+				metrics.Get().SetRoomMOTD(assigned, motd)
+				log.Printf("wt: room %q motd=%q", assigned, motd)
+			}
+			if update.Favicon != nil {
+				metrics.Get().SetRoomFavicon(assigned, *update.Favicon)
+			}
+		}
+	}()
 
 	// Keep session alive until context cancels or session closes
 	select {
@@ -164,7 +262,5 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 	case <-session.Context().Done():
 	}
 
-	// Drain — read to EOF to detect clean close
-	io.ReadAll(stream)
 	log.Printf("wt: session %q disconnected", assigned)
 }

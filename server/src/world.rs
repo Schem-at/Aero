@@ -13,9 +13,10 @@ pub fn build_play_init(
     username: &str,
     properties: &[(String, String, Option<String>)],
     fly_speed: f32,
+    view_distance: i32,
 ) -> Vec<u8> {
     let mut result = Vec::new();
-    result.extend_from_slice(&compress_packet(0x30, &build_login_play(entity_id), threshold));
+    result.extend_from_slice(&compress_packet(0x30, &build_login_play(entity_id, view_distance), threshold));
     result.extend_from_slice(&compress_packet(0x26, &build_game_event(13, 0.0), threshold));
     result.extend_from_slice(&compress_packet(0x5F, &build_set_default_spawn(), threshold));
     // Player Abilities (0x3E) — creative mode with fly enabled
@@ -58,7 +59,7 @@ pub fn build_play_packets(entity_id: i32, threshold: i32) -> Vec<u8> {
     let mut result = Vec::new();
 
     // 1. Login Play (0x30)
-    result.extend_from_slice(&compress_packet(0x30, &build_login_play(entity_id), threshold));
+    result.extend_from_slice(&compress_packet(0x30, &build_login_play(entity_id, 10), threshold));
 
     // 2. Game Event (0x26) — Start waiting for level chunks (event=13)
     result.extend_from_slice(&compress_packet(0x26, &build_game_event(13, 0.0), threshold));
@@ -95,7 +96,7 @@ pub fn build_play_packets(entity_id: i32, threshold: i32) -> Vec<u8> {
     result
 }
 
-fn build_login_play(entity_id: i32) -> Vec<u8> {
+fn build_login_play(entity_id: i32, view_distance: i32) -> Vec<u8> {
     let mut p = Vec::new();
 
     // Entity ID (i32)
@@ -108,9 +109,9 @@ fn build_login_play(entity_id: i32) -> Vec<u8> {
     // Max Players (VarInt)
     p.extend_from_slice(&write_varint(20));
     // View Distance (VarInt)
-    p.extend_from_slice(&write_varint(10));
+    p.extend_from_slice(&write_varint(view_distance));
     // Simulation Distance (VarInt)
-    p.extend_from_slice(&write_varint(10));
+    p.extend_from_slice(&write_varint(view_distance));
     // Reduced Debug Info (bool)
     p.push(0);
     // Enable Respawn Screen (bool)
@@ -784,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_build_play_init_produces_bytes() {
-        let packets = build_play_init(1, 256, "00000000000000000000000000000001", "TestPlayer", &[], 0.05);
+        let packets = build_play_init(1, 256, "00000000000000000000000000000001", "TestPlayer", &[], 0.05, 10);
         assert!(packets.len() > 50, "Got {} bytes", packets.len());
     }
 

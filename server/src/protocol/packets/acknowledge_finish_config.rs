@@ -24,7 +24,7 @@ impl PacketHandler for AcknowledgeFinishConfigHandler {
         } else {
             ("00000000000000000000000000000000", "Player", &[][..])
         };
-        let init_packets = build_play_init(1, threshold, uuid, username, properties, *ctx.fly_speed);
+        let init_packets = build_play_init(1, threshold, uuid, username, properties, *ctx.fly_speed, ctx.server_config.render_distance as i32);
 
         *ctx.awaiting_chunks = true;
 

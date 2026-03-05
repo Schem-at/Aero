@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"time"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -18,7 +19,10 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/user/minecraft-web/proxy/internal/auth"
+	"github.com/user/minecraft-web/proxy/internal/db"
 	"github.com/user/minecraft-web/proxy/internal/metrics"
+	"github.com/user/minecraft-web/proxy/internal/ratelimit"
 	"github.com/user/minecraft-web/proxy/internal/router"
 	"github.com/user/minecraft-web/proxy/internal/tcp"
 	"github.com/user/minecraft-web/proxy/internal/transport"
@@ -36,6 +40,57 @@ func main() {
 	flag.Parse()
 
 	log.Printf("proxy starting... tcp=%d wt=%d domain=%s", *port, *wtPort, *domain)
+
+	// --- Auth setup ---
+	dbPath := os.Getenv("DB_PATH")
+	jwtSecret := os.Getenv("JWT_SECRET")
+	adminUser := os.Getenv("ADMIN_USER")
+	adminPass := os.Getenv("ADMIN_PASS")
+
+	var database *db.DB
+	if dbPath != "" && jwtSecret != "" {
+		var err error
+		database, err = db.New(dbPath)
+		if err != nil {
+			log.Fatalf("db: failed to open %s: %v", dbPath, err)
+		}
+		if err := database.Init(); err != nil {
+			log.Fatalf("db: failed to init: %v", err)
+		}
+		log.Printf("db: using %s", dbPath)
+	} else if adminUser != "" && adminPass != "" && jwtSecret != "" {
+		var err error
+		database, err = db.NewMemory()
+		if err != nil {
+			log.Fatalf("db: failed to create in-memory db: %v", err)
+		}
+		if err := database.Init(); err != nil {
+			log.Fatalf("db: failed to init in-memory db: %v", err)
+		}
+		log.Println("auth: using in-memory admin store (no DB_PATH configured)")
+	} else {
+		log.Println("auth: no auth configured — stats are public")
+	}
+
+	// Seed admin user if configured and no admins exist yet
+	if database != nil && adminUser != "" && adminPass != "" {
+		if jwtSecret == "" {
+			log.Fatalf("JWT_SECRET is required when ADMIN_USER/ADMIN_PASS are set")
+		}
+		count, err := database.CountAdmins()
+		if err != nil {
+			log.Printf("db: failed to count admins: %v", err)
+		} else if count == 0 {
+			hash, err := auth.HashPassword(adminPass)
+			if err != nil {
+				log.Fatalf("failed to hash admin password: %v", err)
+			}
+			if err := database.CreateAdmin(adminUser, hash); err != nil {
+				log.Fatalf("failed to seed admin: %v", err)
+			}
+			log.Printf("seeded admin user: %s", adminUser)
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -58,10 +113,38 @@ func main() {
 		Router: r,
 	}
 
+	// Rate limiters
+	apiLimiter := ratelimit.New(5, 10)      // 5 req/s per IP, burst 10 (general API)
+	loginLimiter := ratelimit.New(0.5, 3)   // 1 req/2s per IP, burst 3 (login brute-force protection)
+
 	// Metrics HTTP API server (proxy dashboard)
+	apiMux := http.NewServeMux()
+	statsHandler := metrics.StatsHandler()
+
+	if database != nil && jwtSecret != "" {
+		// Auth-protected stats
+		apiMux.Handle("/api/proxy/stats", auth.RequireAuth(jwtSecret, apiLimiter.HTTPMiddleware(statsHandler)))
+		apiMux.HandleFunc("/api/auth/login", loginLimiter.HTTPMiddlewareFunc(auth.LoginHandler(database, jwtSecret)))
+		apiMux.HandleFunc("/api/auth/me", apiLimiter.HTTPMiddlewareFunc(auth.MeHandler(jwtSecret)))
+	} else {
+		// No auth — public stats
+		apiMux.Handle("/api/proxy/stats", apiLimiter.HTTPMiddleware(statsHandler))
+	}
+
+	serversHandler := apiLimiter.HTTPMiddlewareFunc(publicServersHandler(*domain, *port))
+	apiMux.HandleFunc("/api/servers", serversHandler)
+
+	apiMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintln(w, "Aero Proxy — API server")
+	})
+
 	apiServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", *apiPort),
-		Handler: metrics.Handler(),
+		Addr:         fmt.Sprintf(":%d", *apiPort),
+		Handler:      apiMux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 	go func() {
 		log.Printf("api: listening on %s", apiServer.Addr)
@@ -74,8 +157,11 @@ func main() {
 	var webServer *http.Server
 	if *webDir != "" {
 		webServer = &http.Server{
-			Addr:    fmt.Sprintf(":%d", *webPort),
-			Handler: webHandler(*webDir),
+			Addr:         fmt.Sprintf(":%d", *webPort),
+			Handler:      webHandler(*webDir, database, jwtSecret, *domain, *port),
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  120 * time.Second,
 		}
 		go func() {
 			log.Printf("web: serving %s on :%d", *webDir, *webPort)
@@ -126,11 +212,15 @@ func main() {
 
 // webHandler builds an HTTP handler that serves static files with SPA fallback,
 // proxies /api/mojang/ to Mojang's session server, and adds gzip-friendly headers.
-func webHandler(dir string) http.Handler {
+func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tcpPort int) http.Handler {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		log.Fatalf("web: invalid directory %q: %v", dir, err)
 	}
+
+	// Rate limiters for web-served API routes
+	webAPILimiter := ratelimit.New(5, 10)
+	webLoginLimiter := ratelimit.New(0.5, 3)
 
 	mux := http.NewServeMux()
 
@@ -151,14 +241,20 @@ func webHandler(dir string) http.Handler {
 			TLSClientConfig: &tls.Config{},
 		},
 	}
-	mux.Handle("/api/mojang/", mojangProxy)
+	mux.Handle("/api/mojang/", webAPILimiter.HTTPMiddleware(mojangProxy))
 
-	// Proxy stats API (same endpoint as metrics server, available on web port too)
-	mux.HandleFunc("/api/proxy/stats", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		json.NewEncoder(w).Encode(metrics.Get().Snapshot())
-	})
+	// Auth + proxy stats endpoints
+	statsHandler := metrics.StatsHandler()
+	if database != nil && jwtSecret != "" {
+		mux.Handle("/api/proxy/stats", auth.RequireAuth(jwtSecret, webAPILimiter.HTTPMiddleware(statsHandler)))
+		mux.HandleFunc("/api/auth/login", webLoginLimiter.HTTPMiddlewareFunc(auth.LoginHandler(database, jwtSecret)))
+		mux.HandleFunc("/api/auth/me", webAPILimiter.HTTPMiddlewareFunc(auth.MeHandler(jwtSecret)))
+	} else {
+		mux.Handle("/api/proxy/stats", webAPILimiter.HTTPMiddleware(statsHandler))
+	}
+
+	// Public server list (no auth)
+	mux.HandleFunc("/api/servers", webAPILimiter.HTTPMiddlewareFunc(publicServersHandler(domain, tcpPort)))
 
 	// Static files with SPA fallback
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -191,6 +287,19 @@ func webHandler(dir string) http.Handler {
 	})
 
 	return mux
+}
+
+// publicServersHandler returns an HTTP handler that serves the public server list.
+func publicServersHandler(domain string, tcpPort int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		servers := metrics.Get().PublicServers(domain, tcpPort)
+		if servers == nil {
+			servers = []metrics.PublicServer{}
+		}
+		json.NewEncoder(w).Encode(servers)
+	}
 }
 
 // setCacheHeaders sets Cache-Control for static assets.

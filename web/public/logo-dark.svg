@@ -1,0 +1,6 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- White chevron for dark backgrounds -->
+  <path d="M12 2 L2 22 L7 22 L12 12 L17 22 L22 22 Z" fill="#fafafa"/>
+  <rect x="10.5" y="15" width="3" height="3" fill="#34d399"/>
+  <rect x="11" y="20" width="2" height="2" fill="rgba(52,211,153,0.4)"/>
+</svg>

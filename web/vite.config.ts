@@ -26,6 +26,14 @@ export default defineConfig({
         target: "http://localhost:9090",
         changeOrigin: true,
       },
+      "/api/servers": {
+        target: "http://localhost:9090",
+        changeOrigin: true,
+      },
+      "/api/auth": {
+        target: "http://localhost:9090",
+        changeOrigin: true,
+      },
     },
   },
 });

@@ -4,17 +4,43 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${WEB_PORT:-80}:80"         # Web UI (or let Dokploy/Traefik handle this)
-      - "${WT_PORT:-4433}:4433/udp"  # WebTransport (QUIC/UDP)
-      - "${WT_PORT:-4433}:4433/tcp"  # WebTransport (TCP fallback)
-      - "${TCP_PORT:-25565}:25565"   # Minecraft clients
-      - "${API_PORT:-9090}:9090"     # Proxy metrics dashboard
+      # WebTransport (QUIC) — must be exposed directly, can't go through Traefik
+      - "4433:4433/udp"
+      - "4433:4433/tcp"
+      # Minecraft TCP — direct port exposure
+      - "25565:25565"
+    networks:
+      - dokploy-network
     environment:
-      - DOMAIN=${DOMAIN:-localhost}
+      - DOMAIN=${DOMAIN:-aeromc.dev}
       - TCP_PORT=25565
       - WT_PORT=4433
       - API_PORT=9090
+      - WEB_PORT=80
+      - DB_PATH=/data/aero.db
+      - ADMIN_USER=${ADMIN_USER:-}
+      - ADMIN_PASS=${ADMIN_PASS:-}
+      - JWT_SECRET=${JWT_SECRET:-}
     volumes:
-      # Mount TLS certs for WebTransport (optional — generates self-signed if missing)
-      - ${CERT_DIR:-./certs}:/etc/aero/certs:ro
+      # Persist SQLite database (admin accounts)
+      - ../files/data:/data
+      # Persist WebTransport TLS certs so cert hash stays stable across restarts
+      - ../files/certs:/etc/aero/certs
+    labels:
+      # Traefik routing — web UI served on port 80 inside container
+      - traefik.enable=true
+      - traefik.http.routers.aero.rule=Host(`${DOMAIN:-aeromc.dev}`)
+      - traefik.http.routers.aero.entrypoints=web,websecure
+      - traefik.http.routers.aero.tls.certResolver=letsencrypt
+      - traefik.http.services.aero.loadbalancer.server.port=80
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
+
+networks:
+  dokploy-network:
+    external: true
