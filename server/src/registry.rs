@@ -331,12 +331,12 @@ mod tests {
     }
 
     #[test]
-    fn test_damage_type_has_25_entries() {
+    fn test_damage_type_has_49_entries() {
         let payload = build_damage_type_registry();
         let (name, name_end) = crate::protocol::types::read_string(&payload);
         assert_eq!(name, "minecraft:damage_type");
         let (count, _) = read_varint(&payload[name_end..]);
-        assert_eq!(count, 25);
+        assert_eq!(count, 49);
     }
 
     #[test]

@@ -121,6 +121,7 @@ mod wasm_exports {
                 total.packets_in += conn.stats.packets_in;
                 total.bytes_in += conn.stats.bytes_in;
                 total.bytes_out += conn.stats.bytes_out;
+                total.tick_count += conn.stats.tick_count;
                 if conn.stats.tps > 0.0 { total.tps = conn.stats.tps; }
                 if conn.stats.mspt > 0.0 { total.mspt = conn.stats.mspt; }
             }

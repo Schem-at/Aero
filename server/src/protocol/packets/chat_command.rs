@@ -29,6 +29,7 @@ impl PacketHandler for ChatCommandHandler {
             "speed" => handle_speed(args, ctx, threshold),
             "fly" => handle_fly(ctx, threshold),
             "time" => handle_time(args, ctx, threshold),
+            "tp" => handle_tp(args, ctx, threshold),
             "help" => handle_help(ctx, threshold),
             _ => {
                 let msg = format!("Unknown command: /{}", cmd);
@@ -116,8 +117,74 @@ fn handle_time(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketRe
     PacketResult::RawResponse(response)
 }
 
+fn handle_tp(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketResult {
+    let parts: Vec<&str> = args.trim().split_whitespace().collect();
+    if parts.len() != 3 {
+        let msg = "Usage: /tp <x> <y> <z>";
+        let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+        return PacketResult::RawResponse(chat);
+    }
+
+    let x: f64 = match parts[0].parse() {
+        Ok(v) => v,
+        Err(_) => {
+            let msg = "Usage: /tp <x> <y> <z> — values must be numbers";
+            let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+            return PacketResult::RawResponse(chat);
+        }
+    };
+    let y: f64 = match parts[1].parse() {
+        Ok(v) => v,
+        Err(_) => {
+            let msg = "Usage: /tp <x> <y> <z> — values must be numbers";
+            let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+            return PacketResult::RawResponse(chat);
+        }
+    };
+    let z: f64 = match parts[2].parse() {
+        Ok(v) => v,
+        Err(_) => {
+            let msg = "Usage: /tp <x> <y> <z> — values must be numbers";
+            let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+            return PacketResult::RawResponse(chat);
+        }
+    };
+
+    // Update stored position
+    *ctx.player_x = x;
+    *ctx.player_y = y;
+    *ctx.player_z = z;
+    *ctx.position_dirty = true;
+
+    // Update chunk center
+    let chunk_x = (x.floor() as i32) >> 4;
+    let chunk_z = (z.floor() as i32) >> 4;
+    *ctx.player_chunk_x = chunk_x;
+    *ctx.player_chunk_z = chunk_z;
+    *ctx.pending_chunk_center = Some((chunk_x, chunk_z));
+    *ctx.awaiting_chunks = true;
+
+    let mut response = Vec::new();
+    // Set Center Chunk to new position
+    let mut view_pos = Vec::new();
+    view_pos.extend_from_slice(&crate::protocol::types::write_varint(chunk_x));
+    view_pos.extend_from_slice(&crate::protocol::types::write_varint(chunk_z));
+    response.extend_from_slice(&compress_packet(0x5C, &view_pos, threshold));
+    // Synchronize Player Position
+    response.extend_from_slice(&compress_packet(
+        0x46,
+        &world::build_sync_player_position_at(x, y, z, *ctx.player_yaw, *ctx.player_pitch),
+        threshold,
+    ));
+    // Chat confirmation
+    let msg = format!("Teleported to {:.1} {:.1} {:.1}", x, y, z);
+    ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
+    response.extend_from_slice(&compress_packet(0x77, &world::build_system_chat_payload(&msg), threshold));
+    PacketResult::RawResponse(response)
+}
+
 fn handle_help(ctx: &mut HandlerContext, threshold: i32) -> PacketResult {
-    let msg = "Commands: /speed <0-10>, /fly, /time <day|night|noon|midnight|ticks>, /help";
+    let msg = "Commands: /speed <0-10>, /fly, /tp <x> <y> <z>, /time <day|night|noon|midnight|ticks>, /help";
     ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
     let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
     PacketResult::RawResponse(chat)

@@ -7,8 +7,25 @@ use crate::protocol::types::{read_string, write_string, write_varint};
 
 pub struct LoginStartHandler;
 
+const EXPECTED_PROTOCOL: i32 = 774;
+
 impl PacketHandler for LoginStartHandler {
     fn handle(&self, payload: &[u8], ctx: &mut HandlerContext) -> PacketResult {
+        // Reject clients on wrong protocol version
+        if *ctx.protocol_version != EXPECTED_PROTOCOL {
+            let msg = format!(
+                "{{\"text\":\"Incompatible client! This server requires Minecraft 1.21.11 (protocol 774).\\nYou are on protocol {}.\",\"color\":\"red\"}}",
+                ctx.protocol_version
+            );
+            ctx.log(
+                LogLevel::Warn,
+                LogCategory::Login,
+                &format!("Rejecting client with protocol {} (expected {})", ctx.protocol_version, EXPECTED_PROTOCOL),
+            );
+            let resp = frame_packet(0x00, &write_string(&msg));
+            return PacketResult::RawResponse(resp);
+        }
+
         // Parse Login Start: username (String) + UUID (16 bytes)
         let (username, offset) = read_string(payload);
 

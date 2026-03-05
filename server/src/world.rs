@@ -593,16 +593,17 @@ pub fn build_player_info_update(uuid: &str, username: &str, properties: &[(Strin
 pub fn build_commands() -> Vec<u8> {
     let mut p = Vec::new();
 
-    // Node count: 11
-    p.extend_from_slice(&write_varint(11));
+    // Node count: 15
+    p.extend_from_slice(&write_varint(15));
 
     // Node 0: Root
     p.push(0x00); // type=root
-    p.extend_from_slice(&write_varint(4)); // 4 children
+    p.extend_from_slice(&write_varint(5)); // 5 children
     p.extend_from_slice(&write_varint(1)); // speed
     p.extend_from_slice(&write_varint(3)); // help
     p.extend_from_slice(&write_varint(4)); // time
     p.extend_from_slice(&write_varint(10)); // fly
+    p.extend_from_slice(&write_varint(11)); // tp
 
     // Node 1: Literal "speed"
     p.push(0x01); // type=literal
@@ -667,6 +668,35 @@ pub fn build_commands() -> Vec<u8> {
     p.push(0x04 | 0x01);
     p.extend_from_slice(&write_varint(0));
     p.extend_from_slice(&write_string("fly"));
+
+    // Node 11: Literal "tp"
+    p.push(0x01); // type=literal
+    p.extend_from_slice(&write_varint(1)); // 1 child
+    p.extend_from_slice(&write_varint(12)); // x
+    p.extend_from_slice(&write_string("tp"));
+
+    // Node 12: Argument "x" double
+    p.push(0x02); // type=argument
+    p.extend_from_slice(&write_varint(1)); // 1 child
+    p.extend_from_slice(&write_varint(13)); // y
+    p.extend_from_slice(&write_string("x"));
+    p.extend_from_slice(&write_varint(6)); // parser=double
+    p.push(0x00); // no min/max flags
+
+    // Node 13: Argument "y" double
+    p.push(0x02); // type=argument
+    p.extend_from_slice(&write_varint(1)); // 1 child
+    p.extend_from_slice(&write_varint(14)); // z
+    p.extend_from_slice(&write_string("y"));
+    p.extend_from_slice(&write_varint(6)); // parser=double
+    p.push(0x00);
+
+    // Node 14: Argument "z" double, executable
+    p.push(0x04 | 0x02); // type=argument + executable
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("z"));
+    p.extend_from_slice(&write_varint(6)); // parser=double
+    p.push(0x00);
 
     // Root index
     p.extend_from_slice(&write_varint(0));
@@ -810,29 +840,22 @@ fn angle_to_byte(degrees: f32) -> u8 {
 }
 
 fn build_sync_player_position() -> Vec<u8> {
+    build_sync_player_position_at(8.0, 66.0, 8.0, 0.0, 0.0)
+}
+
+/// Build a Synchronize Player Position (0x46) payload for arbitrary coordinates.
+pub fn build_sync_player_position_at(x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
     let mut p = Vec::new();
-
-    // Teleport ID (VarInt)
-    p.extend_from_slice(&write_varint(1));
-    // X (f64)
-    p.extend_from_slice(&8.0f64.to_be_bytes());
-    // Y (f64) — one block above platform
-    p.extend_from_slice(&66.0f64.to_be_bytes());
-    // Z (f64)
-    p.extend_from_slice(&8.0f64.to_be_bytes());
-    // Delta X (f64)
-    p.extend_from_slice(&0.0f64.to_be_bytes());
-    // Delta Y (f64)
-    p.extend_from_slice(&0.0f64.to_be_bytes());
-    // Delta Z (f64)
-    p.extend_from_slice(&0.0f64.to_be_bytes());
-    // Yaw (f32)
-    p.extend_from_slice(&0.0f32.to_be_bytes());
-    // Pitch (f32)
-    p.extend_from_slice(&0.0f32.to_be_bytes());
-    // Flags (u32) — all absolute
-    p.extend_from_slice(&0u32.to_be_bytes());
-
+    p.extend_from_slice(&write_varint(1)); // Teleport ID
+    p.extend_from_slice(&x.to_be_bytes());
+    p.extend_from_slice(&y.to_be_bytes());
+    p.extend_from_slice(&z.to_be_bytes());
+    p.extend_from_slice(&0.0f64.to_be_bytes()); // Delta X
+    p.extend_from_slice(&0.0f64.to_be_bytes()); // Delta Y
+    p.extend_from_slice(&0.0f64.to_be_bytes()); // Delta Z
+    p.extend_from_slice(&yaw.to_be_bytes());
+    p.extend_from_slice(&pitch.to_be_bytes());
+    p.extend_from_slice(&0u32.to_be_bytes()); // Flags — all absolute
     p
 }
 
