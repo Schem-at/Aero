@@ -32,9 +32,9 @@ RUN go mod download
 COPY proxy/ .
 RUN CGO_ENABLED=0 go build -o /proxy-bin ./cmd/proxy
 
-# Stage 4: Runtime (minimal — Go binary serves everything)
-FROM alpine:3.21
-RUN apk add --no-cache openssl ca-certificates wget
+# Stage 4: Runtime (Debian slim — Turso driver needs glibc)
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates wget && rm -rf /var/lib/apt/lists/*
 
 COPY --from=web-builder /app/web/dist /var/www/html
 COPY --from=go-builder /proxy-bin /usr/local/bin/proxy
