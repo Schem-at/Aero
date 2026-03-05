@@ -1,3 +1,4 @@
+
 <p align="center">
   <img src="web/public/logo-dark-512.png" alt="Aero" width="128" height="128">
 </p>
@@ -17,6 +18,7 @@
 
 ```
 Minecraft Client (TCP)
+  :333
   → Aero Proxy (subdomain routing)
     → WebTransport (HTTP/3 / QUIC)
       → Browser (React UI + Rust WASM server)
