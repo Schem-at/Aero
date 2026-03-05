@@ -653,6 +653,123 @@ mod wasm_exports {
         })
     }
 
+    /// Get pending block events as JSON. Returns "[]" if none.
+    #[wasm_bindgen]
+    pub fn get_pending_block_events(id: u32) -> String {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                if conn.pending_block_events.is_empty() {
+                    return String::new();
+                }
+                let events: Vec<_> = conn.pending_block_events.drain(..).map(|e| {
+                    serde_json::json!({
+                        "x": e.x,
+                        "y": e.y,
+                        "z": e.z,
+                        "block_state": e.block_state,
+                    })
+                }).collect();
+                serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string())
+            } else {
+                String::new()
+            }
+        })
+    }
+
+    /// Build a Block Update (0x08) packet for a target connection.
+    #[wasm_bindgen]
+    pub fn build_block_update(target_id: u32, x: i32, y: i32, z: i32, block_state: i32) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let payload = crate::protocol::packets::block_events::build_block_update_payload(x, y, z, block_state);
+                let data = crate::compression::compress_packet(0x08, &payload, threshold);
+                if let Some(ref mut cipher) = conn.cipher {
+                    let mut encrypted = data;
+                    cipher.encrypt(&mut encrypted);
+                    encrypted
+                } else {
+                    data
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    /// Set the item-to-block-state mapping for a connection.
+    /// JSON format: {"item_id": block_state_id, ...}
+    #[wasm_bindgen]
+    pub fn set_item_block_map(id: u32, json: &str) {
+        if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, i32>>(json) {
+            POOL.with(|p| {
+                let mut pool = p.borrow_mut();
+                if let Some(conn) = pool.connections.get_mut(&id) {
+                    conn.item_to_block.clear();
+                    for (k, v) in map {
+                        if let Ok(item_id) = k.parse::<i32>() {
+                            conn.item_to_block.insert(item_id, v);
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    /// Build Set Entity Data (0x61) — skin customization metadata for a player entity.
+    /// Returns encrypted bytes to send to target_id.
+    #[wasm_bindgen]
+    pub fn build_entity_metadata(target_id: u32, entity_id: i32, skin_parts: u8) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let payload = crate::world::build_entity_metadata_payload(entity_id, skin_parts);
+                let data = crate::compression::compress_packet(0x61, &payload, threshold);
+                if let Some(ref mut cipher) = conn.cipher {
+                    let mut encrypted = data;
+                    cipher.encrypt(&mut encrypted);
+                    encrypted
+                } else {
+                    data
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    /// Get the skin_parts byte for a connection.
+    #[wasm_bindgen]
+    pub fn get_skin_parts(id: u32) -> u8 {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.skin_parts).unwrap_or(0x7F)
+        })
+    }
+
+    /// Check if skin_parts changed since last check.
+    #[wasm_bindgen]
+    pub fn get_skin_parts_dirty(id: u32) -> bool {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.skin_parts_dirty).unwrap_or(false)
+        })
+    }
+
+    /// Clear the skin_parts dirty flag.
+    #[wasm_bindgen]
+    pub fn clear_skin_parts_dirty(id: u32) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.skin_parts_dirty = false;
+            }
+        });
+    }
+
     /// Teleport a player to coordinates (called from JS after resolving /tp <player>).
     /// Returns the encrypted response bytes (Set Center Chunk + Sync Position + chat).
     #[wasm_bindgen]

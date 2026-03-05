@@ -2,6 +2,7 @@
 /// Supports multiple concurrent player connections.
 
 import type { MainToWorkerMessage, WorkerToMainMessage, WorkerServerConfig } from "@/types/worker-messages";
+import { ITEM_TO_BLOCK } from "@/lib/item-block-map";
 
 // Polyfill: wasm-bindgen uses window.__mc_server_log
 (globalThis as any).window = globalThis;
@@ -260,6 +261,9 @@ let whitelistEnabled = false;
 let whitelist: Set<string> = new Set();
 let globalViewDistance = 10;
 
+// Pre-serialized item→block mapping for WASM connections
+const itemBlockMapJson = JSON.stringify(ITEM_TO_BLOCK);
+
 function chunkKey(cx: number, cz: number): string {
   return `${cx},${cz}`;
 }
@@ -284,6 +288,8 @@ function broadcastExcept(excludeId: number, buildFn: (targetId: number) => Uint8
 
 /** Notify all existing players about a new player, and the new player about all existing ones. */
 function onPlayerJoined(newSession: ClientSession): void {
+  const newSkinParts = wasmModule.get_skin_parts(newSession.connectionId) as number;
+
   // Tell existing players about the new player
   broadcastExcept(newSession.connectionId, (targetId) => {
     // Add to tab list
@@ -294,10 +300,14 @@ function onPlayerJoined(newSession: ClientSession): void {
       targetId, newSession.entityId, newSession.uuid,
       newSession.x, newSession.y, newSession.z, newSession.yaw, newSession.pitch
     ));
-    // Combine both packets
-    const combined = new Uint8Array(infoBytes.length + spawnBytes.length);
+    // Send skin metadata so layers render correctly
+    const metaBytes = new Uint8Array(wasmModule.build_entity_metadata(
+      targetId, newSession.entityId, newSkinParts
+    ));
+    const combined = new Uint8Array(infoBytes.length + spawnBytes.length + metaBytes.length);
     combined.set(infoBytes, 0);
     combined.set(spawnBytes, infoBytes.length);
+    combined.set(metaBytes, infoBytes.length + spawnBytes.length);
     return combined;
   });
 
@@ -309,15 +319,21 @@ function onPlayerJoined(newSession: ClientSession): void {
       const infoBytes = new Uint8Array(wasmModule.build_player_info_add(
         newSession.connectionId, other.uuid, other.username, other.propertiesJson
       ));
-      if (infoBytes.length > 0) {
-        newSession.stream.write(infoBytes).catch(() => {});
-      }
       const spawnBytes = new Uint8Array(wasmModule.build_spawn_entity(
         newSession.connectionId, other.entityId, other.uuid,
         other.x, other.y, other.z, other.yaw, other.pitch
       ));
-      if (spawnBytes.length > 0) {
-        newSession.stream.write(spawnBytes).catch(() => {});
+      // Send existing player's skin metadata
+      const otherSkinParts = wasmModule.get_skin_parts(other.connectionId) as number;
+      const metaBytes = new Uint8Array(wasmModule.build_entity_metadata(
+        newSession.connectionId, other.entityId, otherSkinParts
+      ));
+      const combined = new Uint8Array(infoBytes.length + spawnBytes.length + metaBytes.length);
+      combined.set(infoBytes, 0);
+      combined.set(spawnBytes, infoBytes.length);
+      combined.set(metaBytes, infoBytes.length + spawnBytes.length);
+      if (combined.length > 0) {
+        newSession.stream.write(combined).catch(() => {});
       }
     } catch {}
   }
@@ -610,6 +626,7 @@ async function handleStream(stream: StreamHandle): Promise<void> {
   // Create a new WASM connection for this player
   const connectionId = wasmModule.create_connection() as number;
   const entityId = wasmModule.get_entity_id(connectionId) as number;
+  wasmModule.set_item_block_map(connectionId, itemBlockMapJson);
 
   const session: ClientSession = {
     connectionId,
@@ -768,6 +785,29 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         }
       }
 
+      // Check for block events (break/place) and broadcast to all players
+      if (playerJoined) {
+        const blockEventsStr = wasmModule.get_pending_block_events(connectionId) as string;
+        if (blockEventsStr) {
+          const events = JSON.parse(blockEventsStr) as { x: number; y: number; z: number; block_state: number }[];
+          for (const evt of events) {
+            // Broadcast Block Update to ALL other players
+            for (const [, other] of sessions) {
+              if (other.connectionId === connectionId) continue;
+              if (!other.inPlay) continue;
+              try {
+                const bytes = new Uint8Array(
+                  wasmModule.build_block_update(other.connectionId, evt.x, evt.y, evt.z, evt.block_state)
+                );
+                if (bytes.length > 0) {
+                  other.stream.write(bytes).catch(() => {});
+                }
+              } catch {}
+            }
+          }
+        }
+      }
+
       // Check for position/rotation updates from WASM (dirty flag)
       if (playerJoined) {
         const posStr = wasmModule.get_player_position(connectionId) as string;
@@ -779,6 +819,17 @@ async function handleStream(stream: StreamHandle): Promise<void> {
           session.yaw = pos.yaw;
           session.pitch = pos.pitch;
           broadcastPosition(session);
+        }
+      }
+
+      // Check for skin parts changes and broadcast entity metadata
+      if (playerJoined) {
+        if (wasmModule.get_skin_parts_dirty(connectionId)) {
+          wasmModule.clear_skin_parts_dirty(connectionId);
+          const skinParts = wasmModule.get_skin_parts(connectionId) as number;
+          broadcastExcept(connectionId, (targetId) => {
+            return new Uint8Array(wasmModule.build_entity_metadata(targetId, session.entityId, skinParts));
+          });
         }
       }
     }

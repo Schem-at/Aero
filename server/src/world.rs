@@ -841,6 +841,19 @@ pub fn build_player_info_remove_payload(uuid: &str) -> Vec<u8> {
     p
 }
 
+/// Build Set Entity Data (0x61) payload for player skin customization.
+/// Metadata index 16 = displayed skin parts (BYTE type 0).
+pub fn build_entity_metadata_payload(entity_id: i32, skin_parts: u8) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&write_varint(entity_id));
+    // Metadata entry: index=16, type=0 (BYTE), value=skin_parts
+    p.push(16); // index
+    p.extend_from_slice(&write_varint(0)); // type = BYTE
+    p.push(skin_parts); // value
+    p.push(0xFF); // terminator
+    p
+}
+
 fn angle_to_byte(degrees: f32) -> u8 {
     ((degrees / 360.0 * 256.0) as i32 & 0xFF) as u8
 }

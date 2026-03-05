@@ -3,8 +3,10 @@ use crate::crypto::{CipherPair, ServerKeyPair};
 use crate::logging::{LogCategory, LogLevel, Logger};
 use crate::protocol::handler::PacketRegistry;
 use crate::protocol::packet::frame_packet;
+use crate::protocol::packets::block_events::BlockEvent;
 use crate::protocol::types::{write_string, write_varint};
 use crate::stats::{ConnectionStats, PacketLog, ServerConfig, TickTracker};
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ConnectionState {
@@ -70,6 +72,12 @@ pub struct Connection {
     pub position_dirty: bool,
     pub pending_tp_target: Option<String>,
     pub pending_chat_broadcast: Option<String>,
+    pub skin_parts: u8,
+    pub skin_parts_dirty: bool,
+    pub held_slot: u8,
+    pub hotbar_items: [i32; 9],
+    pub pending_block_events: Vec<BlockEvent>,
+    pub item_to_block: HashMap<i32, i32>,
     logger: Box<dyn Logger>,
     registry: PacketRegistry,
 }
@@ -104,6 +112,12 @@ impl Connection {
             position_dirty: false,
             pending_tp_target: None,
             pending_chat_broadcast: None,
+            skin_parts: 0x7F, // all layers visible by default
+            skin_parts_dirty: false,
+            held_slot: 0,
+            hotbar_items: [0; 9],
+            pending_block_events: Vec::new(),
+            item_to_block: HashMap::new(),
             logger,
             registry: PacketRegistry::default_registry(),
         }
@@ -133,6 +147,11 @@ impl Connection {
         self.position_dirty = false;
         self.pending_tp_target = None;
         self.pending_chat_broadcast = None;
+        self.skin_parts = 0x7F;
+        self.skin_parts_dirty = false;
+        self.held_slot = 0;
+        self.hotbar_items = [0; 9];
+        self.pending_block_events.clear();
         self.stats.player_count = 0;
         self.stats.connected_at_ms = 0.0;
         self.log(LogLevel::Debug, LogCategory::System, "Connection state reset to Handshaking");
@@ -233,6 +252,12 @@ impl Connection {
                 position_dirty: &mut self.position_dirty,
                 pending_tp_target: &mut self.pending_tp_target,
                 pending_chat_broadcast: &mut self.pending_chat_broadcast,
+                skin_parts: &mut self.skin_parts,
+                skin_parts_dirty: &mut self.skin_parts_dirty,
+                held_slot: &mut self.held_slot,
+                hotbar_items: &mut self.hotbar_items,
+                pending_block_events: &mut self.pending_block_events,
+                item_to_block: &self.item_to_block,
             };
 
             let result = handler.handle(&payload, &mut ctx);

@@ -1,6 +1,7 @@
 use crate::connection::{ConnectionState, LoginData, PendingAuthRequest};
 use crate::crypto::CipherPair;
 use crate::logging::{LogCategory, LogLevel, Logger};
+use crate::protocol::packets::block_events::BlockEvent;
 use crate::stats::{ConnectionStats, ServerConfig};
 use std::collections::HashMap;
 
@@ -38,6 +39,12 @@ pub struct HandlerContext<'a> {
     pub position_dirty: &'a mut bool,
     pub pending_tp_target: &'a mut Option<String>,
     pub pending_chat_broadcast: &'a mut Option<String>,
+    pub skin_parts: &'a mut u8,
+    pub skin_parts_dirty: &'a mut bool,
+    pub held_slot: &'a mut u8,
+    pub hotbar_items: &'a mut [i32; 9],
+    pub pending_block_events: &'a mut Vec<BlockEvent>,
+    pub item_to_block: &'a HashMap<i32, i32>,
 }
 
 impl<'a> HandlerContext<'a> {
@@ -168,12 +175,16 @@ impl PacketRegistry {
             Box::new(play_ignore::LogHandler { name: "Chat Session Update" }));
         reg.register(ConnectionState::Play, 0x15,
             Box::new(play_ignore::LogHandler { name: "Plugin Message (Play)" }));
-        reg.register(ConnectionState::Play, 0x28, // was incorrectly 0x27
-            Box::new(play_ignore::LogHandler { name: "Player Action" }));
+        reg.register(ConnectionState::Play, 0x28,
+            Box::new(block_events::PlayerActionHandler));
         reg.register(ConnectionState::Play, 0x2B,
             Box::new(play_ignore::LogHandler { name: "Player Loaded" }));
         reg.register(ConnectionState::Play, 0x34,
-            Box::new(play_ignore::LogHandler { name: "Set Held Item" }));
+            Box::new(block_events::SetHeldItemHandler));
+        reg.register(ConnectionState::Play, 0x37,
+            Box::new(block_events::SetCreativeSlotHandler));
+        reg.register(ConnectionState::Play, 0x3F,
+            Box::new(block_events::UseItemOnHandler));
 
         // Player Abilities (0x27) — flying toggle
         reg.register(ConnectionState::Play, 0x27,
@@ -188,6 +199,8 @@ impl PacketRegistry {
             Box::new(player_position::PlayerPositionHandler));
         reg.register(ConnectionState::Play, 0x20,
             Box::new(player_position::PlayerPositionHandler));
+        reg.register(ConnectionState::Play, 0x23, // Entity Position Sync (client → server acknowledgement)
+            Box::new(play_ignore::SilentHandler { name: "Entity Position Sync" }));
         reg.register(ConnectionState::Play, 0x29, // Player Command (sprint/sneak/elytra)
             Box::new(play_ignore::SilentHandler { name: "Player Command" }));
         reg.register(ConnectionState::Play, 0x2A, // was incorrectly 0x29

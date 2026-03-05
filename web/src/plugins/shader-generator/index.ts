@@ -22,6 +22,7 @@ export class ShaderGenerator implements WorldGenerator {
   private _lastError: string | null = null;
   private _params: ShaderParam[] = [];
   private _paramValues: Map<string, number> = new Map();
+  private _gpuLock: Promise<void> = Promise.resolve();
 
   /** Called when params list changes (after setShaderCode). */
   onParamsChanged: ((params: ShaderParam[], values: Map<string, number>) => void) | null = null;
@@ -142,6 +143,21 @@ export class ShaderGenerator implements WorldGenerator {
   }
 
   async generate(cx: number, cz: number): Promise<ChunkData> {
+    // Serialize GPU access — only one mapAsync can be outstanding at a time
+    const prev = this._gpuLock;
+    let resolve!: () => void;
+    this._gpuLock = new Promise<void>((r) => { resolve = r; });
+
+    await prev;
+
+    try {
+      return await this._generateImpl(cx, cz);
+    } finally {
+      resolve();
+    }
+  }
+
+  private async _generateImpl(cx: number, cz: number): Promise<ChunkData> {
     if (!this.device || !this.pipeline || !this.bindGroup) {
       return { blockStates: new Uint16Array(98304) };
     }
