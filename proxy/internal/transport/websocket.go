@@ -238,11 +238,7 @@ func (s *wsSession) OpenStream() (router.Stream, error) {
 	}
 
 	id := s.nextID.Add(1)
-	stream := &wsStream{
-		id:      id,
-		session: s,
-		buf:     make(chan []byte, 128),
-	}
+	stream := newWSStream(id, s)
 	s.streams.Store(id, stream)
 
 	// Notify browser that a new stream is opened
@@ -284,34 +280,40 @@ func (s *wsSession) writeControl(data []byte) error {
 
 // --- wsStream implements router.Stream ---
 
+// wsStream implements router.Stream with an unbounded queue.
+// A channel-based buffer would drop data when full, corrupting the
+// Minecraft byte stream (causing "VarInt too big" on the client).
 type wsStream struct {
 	id      uint32
 	session *wsSession
-	buf     chan []byte
+	mu      sync.Mutex
+	cond    *sync.Cond
+	queue   [][]byte
 	readBuf []byte
-	closed  atomic.Bool
+	closed  bool
+}
+
+func newWSStream(id uint32, session *wsSession) *wsStream {
+	st := &wsStream{id: id, session: session}
+	st.cond = sync.NewCond(&st.mu)
+	return st
 }
 
 func (st *wsStream) pushData(data []byte) {
-	if st.closed.Load() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.closed {
 		return
 	}
-	select {
-	case st.buf <- append([]byte(nil), data...):
-	default:
-		// Buffer full — drop oldest to prevent blocking
-		select {
-		case <-st.buf:
-		default:
-		}
-		st.buf <- append([]byte(nil), data...)
-	}
+	st.queue = append(st.queue, append([]byte(nil), data...))
+	st.cond.Signal()
 }
 
 func (st *wsStream) closeRead() {
-	if st.closed.CompareAndSwap(false, true) {
-		close(st.buf)
-	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.closed = true
+	st.cond.Broadcast()
 }
 
 func (st *wsStream) Read(p []byte) (int, error) {
@@ -321,10 +323,18 @@ func (st *wsStream) Read(p []byte) (int, error) {
 		return n, nil
 	}
 
-	data, ok := <-st.buf
-	if !ok {
+	st.mu.Lock()
+	for len(st.queue) == 0 && !st.closed {
+		st.cond.Wait()
+	}
+	if len(st.queue) == 0 && st.closed {
+		st.mu.Unlock()
 		return 0, io.EOF
 	}
+	data := st.queue[0]
+	st.queue[0] = nil // allow GC
+	st.queue = st.queue[1:]
+	st.mu.Unlock()
 
 	n := copy(p, data)
 	if n < len(data) {
@@ -334,7 +344,10 @@ func (st *wsStream) Read(p []byte) (int, error) {
 }
 
 func (st *wsStream) Write(p []byte) (int, error) {
-	if st.closed.Load() {
+	st.mu.Lock()
+	closed := st.closed
+	st.mu.Unlock()
+	if closed {
 		return 0, io.ErrClosedPipe
 	}
 	err := st.session.sendFrame(wsMsgData, st.id, p)
@@ -345,10 +358,14 @@ func (st *wsStream) Write(p []byte) (int, error) {
 }
 
 func (st *wsStream) Close() error {
-	if st.closed.CompareAndSwap(false, true) {
+	st.mu.Lock()
+	alreadyClosed := st.closed
+	st.closed = true
+	st.cond.Broadcast()
+	st.mu.Unlock()
+	if !alreadyClosed {
 		st.session.sendFrame(wsMsgStreamClose, st.id, nil)
 		st.session.streams.Delete(st.id)
-		close(st.buf)
 	}
 	return nil
 }
