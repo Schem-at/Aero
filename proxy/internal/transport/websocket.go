@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -110,8 +111,9 @@ func (h *WSHandler) handleConnection(conn *websocket.Conn) {
 	}
 
 	h.ActiveRooms.Add(1)
-	log.Printf("ws: session registered for room %q (requested %q) [%d active]", assigned, preferred, h.ActiveRooms.Load())
-	metrics.Get().RoomRegistered(assigned)
+	hostIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	log.Printf("ws: session registered for room %q (requested %q) from %s [%d active]", assigned, preferred, hostIP, h.ActiveRooms.Load())
+	metrics.Get().RoomRegistered(assigned, hostIP)
 	if reg.Public {
 		metrics.Get().SetRoomPublic(assigned, true)
 	}

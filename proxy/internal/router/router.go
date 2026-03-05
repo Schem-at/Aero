@@ -58,3 +58,31 @@ func (r *Router) Remove(subdomain string) {
 	defer r.mu.Unlock()
 	delete(r.sessions, subdomain)
 }
+
+// CloseSession closes a specific room's session. The session's cleanup defer
+// will handle removing it from the router and metrics.
+func (r *Router) CloseSession(subdomain string) bool {
+	r.mu.RLock()
+	sess, ok := r.sessions[subdomain]
+	r.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	sess.Close()
+	return true
+}
+
+// CloseAll closes all active sessions. Returns the number of sessions closed.
+func (r *Router) CloseAll() int {
+	r.mu.RLock()
+	sessions := make([]Session, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		sessions = append(sessions, s)
+	}
+	r.mu.RUnlock()
+
+	for _, s := range sessions {
+		s.Close()
+	}
+	return len(sessions)
+}

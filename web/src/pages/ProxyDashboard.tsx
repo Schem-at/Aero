@@ -13,6 +13,8 @@ import {
   MemoryStick,
   Wifi,
   WifiOff,
+  Skull,
+  X,
 } from "lucide-react";
 
 // Matches the Go proxy's Snapshot JSON shape
@@ -33,6 +35,7 @@ interface ProxyStats {
 
 interface RoomDetail {
   name: string;
+  host_ip: string;
   registered_at: string;
   active_clients: number;
   total_clients: number;
@@ -82,6 +85,7 @@ export function ProxyDashboard() {
   const [stats, setStats] = useState<ProxyStats | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [kicking, setKicking] = useState<string | null>(null);
 
   const historyRef = useRef<{
     clients: number[];
@@ -135,6 +139,56 @@ export function ProxyDashboard() {
     }
   }, [apiBase, token, logout]);
 
+  const kickRoom = useCallback(async (room: string) => {
+    if (!confirm(`Kick room "${room}"? This will disconnect the server and all its players.`)) return;
+    setKicking(room);
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      await fetch(`${apiBase}/api/proxy/kick`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ room }),
+      });
+      poll();
+    } finally {
+      setKicking(null);
+    }
+  }, [apiBase, token, poll]);
+
+  const kickIP = useCallback(async (ip: string, roomCount: number) => {
+    if (!confirm(`Kick all ${roomCount} room(s) from IP ${ip}?`)) return;
+    setKicking(`ip:${ip}`);
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      await fetch(`${apiBase}/api/proxy/kick-ip`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ip }),
+      });
+      poll();
+    } finally {
+      setKicking(null);
+    }
+  }, [apiBase, token, poll]);
+
+  const kickAll = useCallback(async () => {
+    if (!confirm("KICK ALL ROOMS? This will disconnect every server and player immediately.")) return;
+    setKicking("__all__");
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      await fetch(`${apiBase}/api/proxy/kick-all`, {
+        method: "POST",
+        headers,
+      });
+      poll();
+    } finally {
+      setKicking(null);
+    }
+  }, [apiBase, token, poll]);
+
   useEffect(() => {
     poll();
     const id = setInterval(poll, 2000);
@@ -156,9 +210,21 @@ export function ProxyDashboard() {
             </span>
           </div>
         </div>
-        <span className="text-[11px] text-zinc-600 font-mono">
-          Polling every 2s
-        </span>
+        <div className="flex items-center gap-2">
+          {stats && stats.rooms > 0 && (
+            <button
+              onClick={kickAll}
+              disabled={kicking === "__all__"}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-md bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 hover:border-red-500/30 transition-colors disabled:opacity-50"
+            >
+              <Skull className="h-3 w-3" />
+              Kick All
+            </button>
+          )}
+          <span className="text-[11px] text-zinc-600 font-mono">
+            Polling every 2s
+          </span>
+        </div>
       </div>
 
       {error && (
@@ -198,7 +264,7 @@ export function ProxyDashboard() {
             </div>
           )}
 
-          {/* Rooms */}
+          {/* Rooms grouped by IP */}
           <div>
             <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-2.5">
               Active Rooms
@@ -210,10 +276,42 @@ export function ProxyDashboard() {
                 </p>
               </Card>
             ) : (
-              <div className="space-y-2.5">
-                {stats.room_details.map((room) => (
-                  <RoomCard key={room.name} room={room} />
-                ))}
+              <div className="space-y-3">
+                {(() => {
+                  const byIP = new Map<string, RoomDetail[]>();
+                  for (const room of stats.room_details!) {
+                    const ip = room.host_ip || "unknown";
+                    if (!byIP.has(ip)) byIP.set(ip, []);
+                    byIP.get(ip)!.push(room);
+                  }
+                  return Array.from(byIP.entries()).map(([ip, rooms]) => (
+                    <div key={ip}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-mono text-zinc-400">{ip}</span>
+                          <span className="text-[10px] text-zinc-600">
+                            {rooms.length} room{rooms.length !== 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        {rooms.length > 0 && (
+                          <button
+                            onClick={() => kickIP(ip, rooms.length)}
+                            disabled={kicking === `ip:${ip}`}
+                            className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 hover:border-red-500/30 transition-colors disabled:opacity-50"
+                          >
+                            <X className="h-2.5 w-2.5" />
+                            Kick IP
+                          </button>
+                        )}
+                      </div>
+                      <div className="space-y-2 pl-3 border-l border-zinc-800/50">
+                        {rooms.map((room) => (
+                          <RoomCard key={room.name} room={room} onKick={kickRoom} kicking={kicking === room.name} />
+                        ))}
+                      </div>
+                    </div>
+                  ));
+                })()}
               </div>
             )}
           </div>
@@ -282,7 +380,7 @@ function MetricCard({
   );
 }
 
-function RoomCard({ room }: { room: RoomDetail }) {
+function RoomCard({ room, onKick, kicking }: { room: RoomDetail; onKick: (room: string) => void; kicking: boolean }) {
   const hasClients = room.clients && room.clients.length > 0;
   return (
     <Card className="p-0 overflow-hidden">
@@ -296,10 +394,26 @@ function RoomCard({ room }: { room: RoomDetail }) {
             }`}
           />
           <span className="text-sm font-medium text-zinc-100">{room.name}</span>
+          {room.host_ip && (
+            <span className="text-[10px] text-zinc-600 font-mono bg-zinc-800/60 px-1.5 py-0.5 rounded">
+              {room.host_ip}
+            </span>
+          )}
         </div>
-        <span className="text-[11px] text-zinc-500 tabular-nums bg-zinc-800 px-2 py-0.5 rounded">
-          {room.active_clients} / {room.total_clients} clients
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-zinc-500 tabular-nums bg-zinc-800 px-2 py-0.5 rounded">
+            {room.active_clients} / {room.total_clients} clients
+          </span>
+          <button
+            onClick={() => onKick(room.name)}
+            disabled={kicking}
+            className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 hover:border-red-500/30 transition-colors disabled:opacity-50"
+            title={`Kick ${room.name}`}
+          >
+            <X className="h-3 w-3" />
+            Kick
+          </button>
+        </div>
       </div>
       {hasClients && (
         <div className="border-t border-zinc-800/60">

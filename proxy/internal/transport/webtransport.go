@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"regexp"
 	"sync/atomic"
@@ -151,7 +152,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			log.Printf("wt: upgrade failed: %v", err)
 			return
 		}
-		go s.handleSession(ctx, session)
+		go s.handleSession(ctx, session, r.RemoteAddr)
 	})
 
 	log.Printf("wt: listening on %s", s.Addr)
@@ -170,7 +171,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
-func (s *Server) handleSession(ctx context.Context, session *webtransport.Session) {
+func (s *Server) handleSession(ctx context.Context, session *webtransport.Session, remoteAddr string) {
 	defer session.CloseWithError(0, "session ended")
 
 	// Enforce max rooms
@@ -238,8 +239,9 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 	}
 
 	s.ActiveRooms.Add(1)
-	log.Printf("wt: session registered for room %q (requested %q) [%d active]", assigned, preferred, s.ActiveRooms.Load())
-	metrics.Get().RoomRegistered(assigned)
+	hostIP, _, _ := net.SplitHostPort(remoteAddr)
+	log.Printf("wt: session registered for room %q (requested %q) from %s [%d active]", assigned, preferred, hostIP, s.ActiveRooms.Load())
+	metrics.Get().RoomRegistered(assigned, hostIP)
 	if reg.Public {
 		metrics.Get().SetRoomPublic(assigned, true)
 	}

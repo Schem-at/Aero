@@ -56,6 +56,7 @@ type Metrics struct {
 // RoomMetrics tracks per-room statistics.
 type RoomMetrics struct {
 	Name          string       `json:"name"`
+	HostIP        string       `json:"host_ip"`
 	RegisteredAt  time.Time    `json:"registered_at"`
 	ActiveClients int          `json:"active_clients"`
 	TotalClients  int          `json:"total_clients"`
@@ -100,12 +101,13 @@ var global = &Metrics{
 // Get returns the global metrics instance.
 func Get() *Metrics { return global }
 
-// RoomRegistered records a new WebTransport session.
-func (m *Metrics) RoomRegistered(name string) {
+// RoomRegistered records a new WebTransport/WebSocket session with the host's IP.
+func (m *Metrics) RoomRegistered(name, hostIP string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.rooms[name] = &RoomMetrics{
 		Name:         name,
+		HostIP:       hostIP,
 		RegisteredAt: time.Now(),
 	}
 }
@@ -165,6 +167,19 @@ func (m *Metrics) PublicServers(domain string, tcpPort int) []PublicServer {
 		})
 	}
 	return servers
+}
+
+// RoomsByHostIP returns all room names that belong to a given host IP.
+func (m *Metrics) RoomsByHostIP(ip string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var names []string
+	for _, rm := range m.rooms {
+		if rm.HostIP == ip {
+			names = append(names, rm.Name)
+		}
+	}
+	return names
 }
 
 // BridgeStarted records a new TCP↔WT bridge and returns a client ID.

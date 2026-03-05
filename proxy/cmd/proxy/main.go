@@ -27,7 +27,7 @@ import (
 	"github.com/user/minecraft-web/proxy/internal/db"
 	"github.com/user/minecraft-web/proxy/internal/metrics"
 	"github.com/user/minecraft-web/proxy/internal/ratelimit"
-	"github.com/user/minecraft-web/proxy/internal/router"
+	proxyRouter "github.com/user/minecraft-web/proxy/internal/router"
 	"github.com/user/minecraft-web/proxy/internal/tcp"
 	"github.com/user/minecraft-web/proxy/internal/transport"
 )
@@ -100,7 +100,7 @@ func main() {
 	defer cancel()
 
 	// Shared router for subdomain → session mapping
-	r := router.New()
+	r := proxyRouter.New()
 	activeRooms := &atomic.Int64{}
 
 	// WebTransport server (required — fatal if it fails)
@@ -130,14 +130,24 @@ func main() {
 	apiMux := http.NewServeMux()
 	statsHandler := metrics.StatsHandler()
 
+	kickHandler := kickRoomHandler(r)
+	kickIPHandler := kickIPHandler(r)
+	kickAllHandler := kickAllHandler(r)
+
 	if database != nil && jwtSecret != "" {
-		// Auth-protected stats
+		// Auth-protected stats + kick
 		apiMux.Handle("/api/proxy/stats", auth.RequireAuth(jwtSecret, apiLimiter.HTTPMiddleware(statsHandler)))
+		apiMux.Handle("/api/proxy/kick", auth.RequireAuth(jwtSecret, apiLimiter.HTTPMiddleware(kickHandler)))
+		apiMux.Handle("/api/proxy/kick-ip", auth.RequireAuth(jwtSecret, apiLimiter.HTTPMiddleware(kickIPHandler)))
+		apiMux.Handle("/api/proxy/kick-all", auth.RequireAuth(jwtSecret, apiLimiter.HTTPMiddleware(kickAllHandler)))
 		apiMux.HandleFunc("/api/auth/login", loginLimiter.HTTPMiddlewareFunc(auth.LoginHandler(database, jwtSecret)))
 		apiMux.HandleFunc("/api/auth/me", apiLimiter.HTTPMiddlewareFunc(auth.MeHandler(jwtSecret)))
 	} else {
-		// No auth — public stats
+		// No auth — public stats + kick
 		apiMux.Handle("/api/proxy/stats", apiLimiter.HTTPMiddleware(statsHandler))
+		apiMux.Handle("/api/proxy/kick", apiLimiter.HTTPMiddleware(kickHandler))
+		apiMux.Handle("/api/proxy/kick-ip", apiLimiter.HTTPMiddleware(kickIPHandler))
+		apiMux.Handle("/api/proxy/kick-all", apiLimiter.HTTPMiddleware(kickAllHandler))
 	}
 
 	// Compute cert hash for WebTransport (browsers need this for self-signed certs)
@@ -187,7 +197,7 @@ func main() {
 	if *webDir != "" {
 		webServer = &http.Server{
 			Addr:         fmt.Sprintf(":%d", *webPort),
-			Handler:      webHandler(*webDir, database, jwtSecret, *domain, *port, certHashB64, *wtPort, wsHandler),
+			Handler:      webHandler(*webDir, database, jwtSecret, *domain, *port, certHashB64, *wtPort, wsHandler, r),
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 30 * time.Second,
 			IdleTimeout:  120 * time.Second,
@@ -241,7 +251,7 @@ func main() {
 
 // webHandler builds an HTTP handler that serves static files with SPA fallback,
 // proxies /api/mojang/ to Mojang's session server, and adds gzip-friendly headers.
-func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tcpPort int, certHash string, wtPort int, wsHandler http.Handler) http.Handler {
+func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tcpPort int, certHash string, wtPort int, wsHandler http.Handler, rtr *proxyRouter.Router) http.Handler {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		log.Fatalf("web: invalid directory %q: %v", dir, err)
@@ -274,12 +284,21 @@ func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tc
 
 	// Auth + proxy stats endpoints
 	statsHandler := metrics.StatsHandler()
+	kickHandler := kickRoomHandler(rtr)
+	kickIPHandler := kickIPHandler(rtr)
+	kickAllHandler := kickAllHandler(rtr)
 	if database != nil && jwtSecret != "" {
 		mux.Handle("/api/proxy/stats", auth.RequireAuth(jwtSecret, webAPILimiter.HTTPMiddleware(statsHandler)))
+		mux.Handle("/api/proxy/kick", auth.RequireAuth(jwtSecret, webAPILimiter.HTTPMiddleware(kickHandler)))
+		mux.Handle("/api/proxy/kick-ip", auth.RequireAuth(jwtSecret, webAPILimiter.HTTPMiddleware(kickIPHandler)))
+		mux.Handle("/api/proxy/kick-all", auth.RequireAuth(jwtSecret, webAPILimiter.HTTPMiddleware(kickAllHandler)))
 		mux.HandleFunc("/api/auth/login", webLoginLimiter.HTTPMiddlewareFunc(auth.LoginHandler(database, jwtSecret)))
 		mux.HandleFunc("/api/auth/me", webAPILimiter.HTTPMiddlewareFunc(auth.MeHandler(jwtSecret)))
 	} else {
 		mux.Handle("/api/proxy/stats", webAPILimiter.HTTPMiddleware(statsHandler))
+		mux.Handle("/api/proxy/kick", webAPILimiter.HTTPMiddleware(kickHandler))
+		mux.Handle("/api/proxy/kick-ip", webAPILimiter.HTTPMiddleware(kickIPHandler))
+		mux.Handle("/api/proxy/kick-all", webAPILimiter.HTTPMiddleware(kickAllHandler))
 	}
 
 	// Public server list (no auth)
@@ -360,6 +379,70 @@ func computeCertHash(certFile string) string {
 	}
 	hash := sha256.Sum256(block.Bytes)
 	return base64.StdEncoding.EncodeToString(hash[:])
+}
+
+// kickRoomHandler returns an HTTP handler that kicks a specific room.
+func kickRoomHandler(rtr *proxyRouter.Router) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Room string `json:"room"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Room == "" {
+			http.Error(w, `{"error":"room is required"}`, http.StatusBadRequest)
+			return
+		}
+		if rtr.CloseSession(req.Room) {
+			log.Printf("admin: kicked room %q", req.Room)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "room": req.Room})
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "room not found"})
+		}
+	})
+}
+
+// kickIPHandler returns an HTTP handler that kicks all rooms from a specific IP.
+func kickIPHandler(rtr *proxyRouter.Router) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			IP string `json:"ip"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IP == "" {
+			http.Error(w, `{"error":"ip is required"}`, http.StatusBadRequest)
+			return
+		}
+		rooms := metrics.Get().RoomsByHostIP(req.IP)
+		for _, room := range rooms {
+			rtr.CloseSession(room)
+		}
+		log.Printf("admin: kicked %d rooms from IP %s", len(rooms), req.IP)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "ip": req.IP, "kicked": len(rooms), "rooms": rooms})
+	})
+}
+
+// kickAllHandler returns an HTTP handler that kicks all rooms.
+func kickAllHandler(rtr *proxyRouter.Router) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		count := rtr.CloseAll()
+		log.Printf("admin: kicked all rooms (%d)", count)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "kicked": count})
+	})
 }
 
 // setCacheHeaders sets Cache-Control for static assets.
