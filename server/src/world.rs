@@ -543,7 +543,7 @@ fn build_chunk_batch_finished(count: i32) -> Vec<u8> {
 }
 
 /// Build Player Info Update (0x44) payload — adds player to tab list.
-fn build_player_info_update(uuid: &str, username: &str, properties: &[(String, String, Option<String>)]) -> Vec<u8> {
+pub fn build_player_info_update(uuid: &str, username: &str, properties: &[(String, String, Option<String>)]) -> Vec<u8> {
     let mut p = Vec::new();
 
     // Actions bitmask: Add Player (0x01) | Update Game Mode (0x04) | Update Listed (0x08) | Update Latency (0x10)
@@ -706,6 +706,107 @@ pub fn build_system_chat_payload(message: &str) -> Vec<u8> {
     payload.extend_from_slice(bytes);
     payload.push(0); // overlay = false
     payload
+}
+
+/// Build Spawn Entity (0x01) payload for a player entity.
+/// Entity type 128 = minecraft:player (protocol 774).
+pub fn build_spawn_entity_payload(entity_id: i32, uuid: &str, x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
+    let mut p = Vec::new();
+    // Entity ID (VarInt)
+    p.extend_from_slice(&write_varint(entity_id));
+    // Entity UUID (16 bytes)
+    let uuid_hex: String = uuid.chars().filter(|c| *c != '-').collect();
+    if uuid_hex.len() == 32 {
+        for i in 0..16 {
+            let byte = u8::from_str_radix(&uuid_hex[i*2..i*2+2], 16).unwrap_or(0);
+            p.push(byte);
+        }
+    } else {
+        p.extend_from_slice(&[0u8; 16]);
+    }
+    // Type (VarInt) — minecraft:player = 128 in protocol 774
+    p.extend_from_slice(&write_varint(128));
+    // X, Y, Z (f64)
+    p.extend_from_slice(&x.to_be_bytes());
+    p.extend_from_slice(&y.to_be_bytes());
+    p.extend_from_slice(&z.to_be_bytes());
+    // Pitch, Yaw (angle = byte, 256/360 degrees)
+    p.push(angle_to_byte(pitch));
+    p.push(angle_to_byte(yaw));
+    // Head Yaw (angle)
+    p.push(angle_to_byte(yaw));
+    // Data (VarInt) — 0 for players
+    p.extend_from_slice(&write_varint(0));
+    // Velocity X, Y, Z (i16) — 0
+    p.extend_from_slice(&0i16.to_be_bytes());
+    p.extend_from_slice(&0i16.to_be_bytes());
+    p.extend_from_slice(&0i16.to_be_bytes());
+    p
+}
+
+/// Build Entity Teleport (0x75) payload.
+pub fn build_entity_teleport_payload(entity_id: i32, x: f64, y: f64, z: f64, yaw: f32, pitch: f32, on_ground: bool) -> Vec<u8> {
+    let mut p = Vec::new();
+    // Entity ID (VarInt)
+    p.extend_from_slice(&write_varint(entity_id));
+    // X, Y, Z (f64)
+    p.extend_from_slice(&x.to_be_bytes());
+    p.extend_from_slice(&y.to_be_bytes());
+    p.extend_from_slice(&z.to_be_bytes());
+    // Velocity X, Y, Z (f64) — 0
+    p.extend_from_slice(&0.0f64.to_be_bytes());
+    p.extend_from_slice(&0.0f64.to_be_bytes());
+    p.extend_from_slice(&0.0f64.to_be_bytes());
+    // Yaw, Pitch (float)
+    p.extend_from_slice(&yaw.to_be_bytes());
+    p.extend_from_slice(&pitch.to_be_bytes());
+    // Flags (i32) — all absolute
+    p.extend_from_slice(&0i32.to_be_bytes());
+    // On Ground
+    p.push(if on_ground { 1 } else { 0 });
+    p
+}
+
+/// Build Set Head Rotation (0x50) payload.
+pub fn build_head_rotation_payload(entity_id: i32, yaw: f32) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&write_varint(entity_id));
+    p.push(angle_to_byte(yaw));
+    p
+}
+
+/// Build Remove Entities (0x47) payload.
+pub fn build_remove_entities_payload(entity_ids: &[i32]) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&write_varint(entity_ids.len() as i32));
+    for &id in entity_ids {
+        p.extend_from_slice(&write_varint(id));
+    }
+    p
+}
+
+/// Build Player Info Remove payload (action=0x00 with remove flag).
+/// Actually uses Player Info Update (0x44) with actions=0x00 — but the remove
+/// uses a separate packet: Player Info Remove (0x43).
+pub fn build_player_info_remove_payload(uuid: &str) -> Vec<u8> {
+    let mut p = Vec::new();
+    // Number of players
+    p.extend_from_slice(&write_varint(1));
+    // UUID
+    let uuid_hex: String = uuid.chars().filter(|c| *c != '-').collect();
+    if uuid_hex.len() == 32 {
+        for i in 0..16 {
+            let byte = u8::from_str_radix(&uuid_hex[i*2..i*2+2], 16).unwrap_or(0);
+            p.push(byte);
+        }
+    } else {
+        p.extend_from_slice(&[0u8; 16]);
+    }
+    p
+}
+
+fn angle_to_byte(degrees: f32) -> u8 {
+    ((degrees / 360.0 * 256.0) as i32 & 0xFF) as u8
 }
 
 fn build_sync_player_position() -> Vec<u8> {

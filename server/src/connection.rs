@@ -45,6 +45,7 @@ pub struct PendingAuthRequest {
 pub struct Connection {
     pub state: ConnectionState,
     pub protocol_version: i32,
+    pub entity_id: i32,
     pub stats: ConnectionStats,
     pub packet_log: PacketLog,
     pub login_data: Option<LoginData>,
@@ -70,6 +71,7 @@ impl Connection {
         Connection {
             state: ConnectionState::Handshaking,
             protocol_version: 0,
+            entity_id: 1,
             stats: ConnectionStats::default(),
             packet_log: PacketLog::new(),
             login_data: None,

@@ -60,18 +60,18 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
     bridge.onRoomAssigned = (room) => {
       setAssignedRoom(room);
     };
-    bridge.onChunksNeeded = async (chunks) => {
+    bridge.onChunksNeeded = async (playerId, chunks) => {
       try {
         const gen = generateChunksRef.current;
         const results = await gen(chunks);
         for (const { cx, cz, blockStates } of results) {
-          bridge.sendChunkData(cx, cz, blockStates);
+          bridge.sendChunkData(playerId, cx, cz, blockStates);
         }
-        bridge.sendChunkBatchDone(results.length);
+        bridge.sendChunkBatchDone(playerId, results.length);
       } catch (err) {
         addLog("error", "system", `Chunk generation failed: ${err}`);
         // Still send batch done so the client doesn't hang
-        bridge.sendChunkBatchDone(0);
+        bridge.sendChunkBatchDone(playerId, 0);
       }
     };
 

@@ -10,7 +10,7 @@ export type LogCallback = (level: LogLevel, category: LogCategory, message: stri
 export type StatsCallback = (stats: ConnectionStats) => void;
 export type PacketLogCallback = (entries: PacketLogEntry[]) => void;
 export type StatusChangeCallback = (status: "running" | "stopped" | "error", error?: string) => void;
-export type ChunksNeededCallback = (chunks: { cx: number; cz: number }[]) => void;
+export type ChunksNeededCallback = (playerId: number, chunks: { cx: number; cz: number }[]) => void;
 export type RoomAssignedCallback = (room: string) => void;
 
 export class ServerBridge {
@@ -49,7 +49,7 @@ export class ServerBridge {
           this.onStatusChange?.(msg.status, msg.error);
           break;
         case "chunks_needed":
-          this.onChunksNeeded?.(msg.chunks);
+          this.onChunksNeeded?.(msg.playerId, msg.chunks);
           break;
         case "room_assigned":
           this.onRoomAssigned?.(msg.room);
@@ -84,17 +84,17 @@ export class ServerBridge {
     this.send({ type: "queue_chat", message });
   }
 
-  sendChunkData(cx: number, cz: number, blockStates: Uint16Array): void {
+  sendChunkData(playerId: number, cx: number, cz: number, blockStates: Uint16Array): void {
     if (!this.worker) return;
     // Transfer the buffer for zero-copy
     this.worker.postMessage(
-      { type: "chunk_data", cx, cz, blockStates } satisfies MainToWorkerMessage,
+      { type: "chunk_data", playerId, cx, cz, blockStates } satisfies MainToWorkerMessage,
       [blockStates.buffer]
     );
   }
 
-  sendChunkBatchDone(count: number): void {
-    this.send({ type: "chunk_batch_done", count });
+  sendChunkBatchDone(playerId: number, count: number): void {
+    this.send({ type: "chunk_batch_done", playerId, count });
   }
 
   regenerateChunks(): void {

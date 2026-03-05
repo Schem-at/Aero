@@ -7,8 +7,8 @@ export type MainToWorkerMessage =
   | { type: "stop" }
   | { type: "set_config"; config: WorkerServerConfig }
   | { type: "queue_chat"; message: string }
-  | { type: "chunk_data"; cx: number; cz: number; blockStates: Uint16Array }
-  | { type: "chunk_batch_done"; count: number }
+  | { type: "chunk_data"; playerId: number; cx: number; cz: number; blockStates: Uint16Array }
+  | { type: "chunk_batch_done"; playerId: number; count: number }
   | { type: "regenerate_chunks" }
   | { type: "set_public"; public: boolean };
 
@@ -30,5 +30,5 @@ export type WorkerToMainMessage =
   | { type: "stats"; stats: ConnectionStats }
   | { type: "packet_log"; entries: PacketLogEntry[] }
   | { type: "status_change"; status: "running" | "stopped" | "error"; error?: string }
-  | { type: "chunks_needed"; chunks: { cx: number; cz: number }[] }
+  | { type: "chunks_needed"; playerId: number; chunks: { cx: number; cz: number }[] }
   | { type: "room_assigned"; room: string };

@@ -1,4 +1,5 @@
 /// Server Worker — runs WASM + WebTransport/WebSocket off the main thread.
+/// Supports multiple concurrent player connections.
 
 import type { MainToWorkerMessage, WorkerToMainMessage, WorkerServerConfig } from "@/types/worker-messages";
 
@@ -206,88 +207,256 @@ class WSStream implements StreamHandle {
 }
 
 // ---------------------------------------------------------------------------
+// Per-player session state
+// ---------------------------------------------------------------------------
+
+interface ClientSession {
+  connectionId: number;  // WASM connection pool ID
+  entityId: number;      // Minecraft entity ID
+  stream: StreamHandle;
+  sentChunks: Set<string>;
+  chunkQueue: Promise<void>;
+  viewDistance: number;
+  isInitialSpawn: boolean;
+  batchInFlight: boolean;
+  pendingChunkRequest: boolean;
+  lastChunkCenterX: number;
+  lastChunkCenterZ: number;
+  // Player data (populated after auth)
+  username: string;
+  uuid: string;
+  propertiesJson: string;
+  // Position tracking for multiplayer
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+}
+
+// ---------------------------------------------------------------------------
 // Worker state
 // ---------------------------------------------------------------------------
 
 let wasmModule: any = null;
 let activeTransport: TransportHandle | null = null;
 let controlStream: StreamHandle | null = null;
-let activeStream: StreamHandle | null = null;
 let statsInterval: ReturnType<typeof setInterval> | null = null;
 
-// Whitelist state (updated via set_config messages)
+// All active player sessions, keyed by connectionId
+const sessions = new Map<number, ClientSession>();
+
+// Whitelist state
 let whitelistEnabled = false;
 let whitelist: Set<string> = new Set();
-
-// Serialization queue for chunk operations — ensures cipher ordering
-let chunkQueue: Promise<void> = Promise.resolve();
-
-// Track which chunks have been sent to avoid resending
-const sentChunks = new Set<string>();
-let viewDistance = 10;
-let isInitialSpawn = true;
-let lastChunkCenterX = 0;
-let lastChunkCenterZ = 0;
-
-// Batch-in-flight tracking — prevents nested Chunk Batch Start packets
-// which cause the client to receive chunks without rendering them.
-let batchInFlight = false;
-let pendingChunkRequest = false;
+let globalViewDistance = 10;
 
 function chunkKey(cx: number, cz: number): string {
   return `${cx},${cz}`;
 }
 
-function requestChunks(): void {
-  // If a batch is already in flight, defer this request until it completes.
-  if (batchInFlight) {
-    pendingChunkRequest = true;
+// ---------------------------------------------------------------------------
+// Multiplayer helpers
+// ---------------------------------------------------------------------------
+
+/** Send a packet to all sessions except the given one. */
+function broadcastExcept(excludeId: number, buildFn: (targetId: number) => Uint8Array): void {
+  for (const [, session] of sessions) {
+    if (session.connectionId === excludeId) continue;
+    if (!session.username) continue; // Not yet fully connected
+    try {
+      const bytes = buildFn(session.connectionId);
+      if (bytes.length > 0) {
+        session.stream.write(bytes).catch(() => {});
+      }
+    } catch {}
+  }
+}
+
+/** Notify all existing players about a new player, and the new player about all existing ones. */
+function onPlayerJoined(newSession: ClientSession): void {
+  // Tell existing players about the new player
+  broadcastExcept(newSession.connectionId, (targetId) => {
+    // Add to tab list
+    const infoBytes = new Uint8Array(wasmModule.build_player_info_add(
+      targetId, newSession.uuid, newSession.username, newSession.propertiesJson
+    ));
+    const spawnBytes = new Uint8Array(wasmModule.build_spawn_entity(
+      targetId, newSession.entityId, newSession.uuid,
+      newSession.x, newSession.y, newSession.z, newSession.yaw, newSession.pitch
+    ));
+    // Combine both packets
+    const combined = new Uint8Array(infoBytes.length + spawnBytes.length);
+    combined.set(infoBytes, 0);
+    combined.set(spawnBytes, infoBytes.length);
+    return combined;
+  });
+
+  // Tell the new player about all existing players
+  for (const [, other] of sessions) {
+    if (other.connectionId === newSession.connectionId) continue;
+    if (!other.username) continue;
+    try {
+      const infoBytes = new Uint8Array(wasmModule.build_player_info_add(
+        newSession.connectionId, other.uuid, other.username, other.propertiesJson
+      ));
+      if (infoBytes.length > 0) {
+        newSession.stream.write(infoBytes).catch(() => {});
+      }
+      const spawnBytes = new Uint8Array(wasmModule.build_spawn_entity(
+        newSession.connectionId, other.entityId, other.uuid,
+        other.x, other.y, other.z, other.yaw, other.pitch
+      ));
+      if (spawnBytes.length > 0) {
+        newSession.stream.write(spawnBytes).catch(() => {});
+      }
+    } catch {}
+  }
+}
+
+/** Notify all players that a player disconnected. */
+function onPlayerLeft(session: ClientSession): void {
+  const entityIdsJson = JSON.stringify([session.entityId]);
+  broadcastExcept(session.connectionId, (targetId) => {
+    const removeBytes = new Uint8Array(wasmModule.build_remove_entities(targetId, entityIdsJson));
+    const infoRemoveBytes = new Uint8Array(wasmModule.build_player_info_remove(targetId, session.uuid));
+    const combined = new Uint8Array(removeBytes.length + infoRemoveBytes.length);
+    combined.set(removeBytes, 0);
+    combined.set(infoRemoveBytes, removeBytes.length);
+    return combined;
+  });
+}
+
+/** Broadcast position update from one player to all others. */
+function broadcastPosition(session: ClientSession): void {
+  broadcastExcept(session.connectionId, (targetId) => {
+    const teleportBytes = new Uint8Array(wasmModule.build_entity_teleport(
+      targetId, session.entityId,
+      session.x, session.y, session.z, session.yaw, session.pitch, false
+    ));
+    const headBytes = new Uint8Array(wasmModule.build_head_rotation(
+      targetId, session.entityId, session.yaw
+    ));
+    const combined = new Uint8Array(teleportBytes.length + headBytes.length);
+    combined.set(teleportBytes, 0);
+    combined.set(headBytes, teleportBytes.length);
+    return combined;
+  });
+}
+
+/** Broadcast a chat message to all players. */
+function broadcastChatMessage(message: string): void {
+  for (const [, session] of sessions) {
+    if (!session.username) continue;
+    try {
+      const bytes = new Uint8Array(wasmModule.build_system_chat(session.connectionId, message));
+      if (bytes.length > 0) {
+        session.stream.write(bytes).catch(() => {});
+      }
+    } catch {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Per-session chunk management
+// ---------------------------------------------------------------------------
+
+function requestChunksForSession(session: ClientSession): void {
+  if (session.batchInFlight) {
+    session.pendingChunkRequest = true;
     return;
   }
 
-  const centerStr = wasmModule.get_pending_chunk_center() as string;
-  let centerX = lastChunkCenterX, centerZ = lastChunkCenterZ;
+  const centerStr = wasmModule.get_pending_chunk_center(session.connectionId) as string;
+  let centerX = session.lastChunkCenterX, centerZ = session.lastChunkCenterZ;
   if (centerStr) {
     const [cx, cz] = centerStr.split(",").map(Number);
     centerX = cx;
     centerZ = cz;
-    wasmModule.clear_pending_chunk_center();
+    wasmModule.clear_pending_chunk_center(session.connectionId);
   }
-  lastChunkCenterX = centerX;
-  lastChunkCenterZ = centerZ;
+  session.lastChunkCenterX = centerX;
+  session.lastChunkCenterZ = centerZ;
 
   const needed: { cx: number; cz: number }[] = [];
   const nowVisible = new Set<string>();
 
-  for (let dx = -viewDistance; dx <= viewDistance; dx++) {
-    for (let dz = -viewDistance; dz <= viewDistance; dz++) {
+  for (let dx = -session.viewDistance; dx <= session.viewDistance; dx++) {
+    for (let dz = -session.viewDistance; dz <= session.viewDistance; dz++) {
       const cx = centerX + dx;
       const cz = centerZ + dz;
       const key = chunkKey(cx, cz);
       nowVisible.add(key);
-      if (!sentChunks.has(key)) {
+      if (!session.sentChunks.has(key)) {
         needed.push({ cx, cz });
-        sentChunks.add(key);
+        session.sentChunks.add(key);
       }
     }
   }
 
-  for (const key of sentChunks) {
+  for (const key of session.sentChunks) {
     if (!nowVisible.has(key)) {
-      sentChunks.delete(key);
+      session.sentChunks.delete(key);
     }
   }
 
-  batchInFlight = true;
+  session.batchInFlight = true;
 
   if (needed.length > 0) {
-    enqueueChunkBatchStart();
-    postMsg({ type: "chunks_needed", chunks: needed });
+    enqueueChunkBatchStart(session);
+    postMsg({ type: "chunks_needed", playerId: session.connectionId, chunks: needed });
   } else {
-    enqueueChunkBatchStart();
-    enqueueChunkBatchDone(0);
+    enqueueChunkBatchStart(session);
+    enqueueChunkBatchDone(session, 0);
   }
 }
+
+function enqueueChunkBatchStart(session: ClientSession): void {
+  session.chunkQueue = session.chunkQueue.then(async () => {
+    if (!wasmModule) return;
+    const startBytes = new Uint8Array(wasmModule.chunk_batch_start(session.connectionId));
+    if (startBytes.length > 0) {
+      try { await session.stream.write(startBytes); } catch {}
+    }
+  });
+}
+
+function enqueueChunkData(session: ClientSession, cx: number, cz: number, blockStates: Uint16Array): void {
+  session.chunkQueue = session.chunkQueue.then(async () => {
+    if (!wasmModule) return;
+    const chunkBytes = new Uint8Array(wasmModule.build_chunk(session.connectionId, cx, cz, blockStates));
+    if (chunkBytes.length > 0) {
+      try { await session.stream.write(chunkBytes); } catch {}
+    }
+  });
+}
+
+function enqueueChunkBatchDone(session: ClientSession, count: number): void {
+  session.chunkQueue = session.chunkQueue.then(async () => {
+    if (!wasmModule) return;
+    let finishBytes: Uint8Array;
+    if (session.isInitialSpawn) {
+      finishBytes = new Uint8Array(wasmModule.play_finish(session.connectionId, count));
+      session.isInitialSpawn = false;
+    } else {
+      finishBytes = new Uint8Array(wasmModule.chunk_batch_end(session.connectionId, count));
+    }
+    if (finishBytes.length > 0) {
+      try { await session.stream.write(finishBytes); } catch {}
+    }
+    postMsg({ type: "log", level: "info", category: "protocol", message: `[${session.username || "?"}] Sent ${count} chunks + batch end` });
+
+    session.batchInFlight = false;
+    if (session.pendingChunkRequest) {
+      session.pendingChunkRequest = false;
+      requestChunksForSession(session);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// WASM init
+// ---------------------------------------------------------------------------
 
 async function initWasm(): Promise<void> {
   if (wasmModule) return;
@@ -335,7 +504,7 @@ async function handleStart(wtUrl: string, wsUrl: string, config: WorkerServerCon
     wasmModule.set_server_config(JSON.stringify(config));
     whitelistEnabled = config.whitelist_enabled ?? false;
     whitelist = new Set((config.whitelist ?? []).map((n: string) => n.toLowerCase()));
-    viewDistance = config.render_distance ?? 10;
+    globalViewDistance = config.render_distance ?? 10;
 
     postMsg({ type: "log", level: "info", category: "system", message: "WASM initialized, connecting transport..." });
 
@@ -362,7 +531,7 @@ async function handleStart(wtUrl: string, wsUrl: string, config: WorkerServerCon
     postMsg({ type: "status_change", status: "running" });
     postMsg({ type: "log", level: "info", category: "system", message: "Server running — accepting Minecraft connections" });
 
-    // Accept incoming streams
+    // Accept incoming streams (concurrent)
     acceptStreams();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -402,7 +571,6 @@ async function registerRoom(room: string, isPublic: boolean = false, motd?: stri
     postMsg({ type: "room_assigned", room });
   }
 
-  // Keep control stream for sending updates (public toggle, motd changes)
   controlStream = stream;
 }
 
@@ -412,7 +580,10 @@ async function acceptStreams(): Promise<void> {
     while (true) {
       const stream = await activeTransport.acceptStream();
       if (!stream) break;
-      handleStream(stream);
+      // Spawn concurrent handler — don't await!
+      handleStream(stream).catch((err) => {
+        postMsg({ type: "log", level: "debug", category: "transport", message: `Stream handler error: ${err}` });
+      });
     }
   } catch (err) {
     if (activeTransport) {
@@ -422,16 +593,33 @@ async function acceptStreams(): Promise<void> {
 }
 
 async function handleStream(stream: StreamHandle): Promise<void> {
-  postMsg({ type: "log", level: "info", category: "transport", message: "New client stream accepted" });
+  // Create a new WASM connection for this player
+  const connectionId = wasmModule.create_connection() as number;
+  const entityId = wasmModule.get_entity_id(connectionId) as number;
 
-  // Reset WASM state for new connection (no mutex needed — worker is single-threaded)
-  wasmModule.reset_state();
-  sentChunks.clear();
-  chunkQueue = Promise.resolve();
-  isInitialSpawn = true;
-  batchInFlight = false;
-  pendingChunkRequest = false;
-  activeStream = stream;
+  const session: ClientSession = {
+    connectionId,
+    entityId,
+    stream,
+    sentChunks: new Set(),
+    chunkQueue: Promise.resolve(),
+    viewDistance: globalViewDistance,
+    isInitialSpawn: true,
+    batchInFlight: false,
+    pendingChunkRequest: false,
+    lastChunkCenterX: 0,
+    lastChunkCenterZ: 0,
+    username: "",
+    uuid: "",
+    propertiesJson: "[]",
+    x: 8, y: 66, z: 8,
+    yaw: 0, pitch: 0,
+  };
+
+  sessions.set(connectionId, session);
+  postMsg({ type: "log", level: "info", category: "transport", message: `New client stream accepted (connection ${connectionId})` });
+
+  let playerJoined = false;
 
   try {
     while (true) {
@@ -439,10 +627,10 @@ async function handleStream(stream: StreamHandle): Promise<void> {
       if (!value) break;
 
       // Process packet through WASM
-      const response = new Uint8Array(wasmModule.handle_packet(value));
+      const response = new Uint8Array(wasmModule.handle_packet(connectionId, value));
 
       // Check for pending Mojang auth
-      const pendingStr = wasmModule.get_pending_auth() as string;
+      const pendingStr = wasmModule.get_pending_auth(connectionId) as string;
       if (pendingStr) {
         const { username, server_hash } = JSON.parse(pendingStr);
         postMsg({
@@ -454,7 +642,7 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         if (whitelistEnabled && !whitelist.has(username.toLowerCase())) {
           postMsg({ type: "log", level: "warn", category: "transport", message: `${username} not on whitelist — disconnecting` });
           const reason = JSON.stringify({ text: "You are not whitelisted on this server." });
-          const disconnectBytes = new Uint8Array(wasmModule.build_disconnect(reason));
+          const disconnectBytes = new Uint8Array(wasmModule.build_disconnect(connectionId, reason));
           if (disconnectBytes.length > 0) {
             await stream.write(disconnectBytes);
           }
@@ -466,11 +654,24 @@ async function handleStream(stream: StreamHandle): Promise<void> {
             `/api/mojang/session/minecraft/hasJoined?username=${encodeURIComponent(username)}&serverId=${encodeURIComponent(server_hash)}`
           );
           const mojangJson = await mojangResp.text();
-          const loginBytes = new Uint8Array(wasmModule.complete_auth(mojangJson));
+          const loginBytes = new Uint8Array(wasmModule.complete_auth(connectionId, mojangJson));
 
           if (loginBytes.length > 0) {
             postMsg({ type: "log", level: "info", category: "transport", message: `Sending Login Success (${loginBytes.length} bytes)` });
             await stream.write(loginBytes);
+          }
+
+          // Store player data from login
+          const loginDataStr = wasmModule.get_login_data(connectionId) as string;
+          if (loginDataStr) {
+            try {
+              const ld = JSON.parse(loginDataStr);
+              session.username = ld.username || "";
+              session.uuid = ld.uuid || "";
+              session.propertiesJson = JSON.stringify(
+                (ld.properties || []).map((p: [string, string, string | null]) => [p[0], p[1], p[2]])
+              );
+            } catch {}
           }
         } catch (err) {
           postMsg({ type: "log", level: "error", category: "transport", message: `Mojang auth failed: ${err}` });
@@ -479,83 +680,58 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         await stream.write(response);
       }
 
-      // Check if WASM is awaiting chunks
-      if (wasmModule.get_awaiting_chunks()) {
-        wasmModule.clear_awaiting_chunks();
-        requestChunks();
+      // Check if WASM is awaiting chunks (entered Play state)
+      if (wasmModule.get_awaiting_chunks(connectionId)) {
+        wasmModule.clear_awaiting_chunks(connectionId);
+
+        // Player has entered play state — notify other players
+        if (!playerJoined && session.username) {
+          playerJoined = true;
+          postMsg({ type: "log", level: "info", category: "system",
+            message: `${session.username} joined the server (entity ${entityId})` });
+          onPlayerJoined(session);
+        }
+
+        requestChunksForSession(session);
+      }
+
+      // Check for position updates (pending chunk center means player moved)
+      const centerStr = wasmModule.get_pending_chunk_center(connectionId) as string;
+      if (centerStr && playerJoined) {
+        // Player moved to new chunk — update position estimate
+        const [cx, cz] = centerStr.split(",").map(Number);
+        session.x = cx * 16 + 8;
+        session.z = cz * 16 + 8;
+        broadcastPosition(session);
+        requestChunksForSession(session);
       }
     }
   } catch (err) {
-    postMsg({ type: "log", level: "debug", category: "transport", message: `Stream ended: ${err}` });
+    postMsg({ type: "log", level: "debug", category: "transport", message: `Stream ended (${session.username || connectionId}): ${err}` });
   } finally {
+    if (playerJoined) {
+      postMsg({ type: "log", level: "info", category: "system",
+        message: `${session.username} left the server` });
+      onPlayerLeft(session);
+    }
     stream.close();
-    activeStream = null;
+    sessions.delete(connectionId);
+    wasmModule.remove_connection(connectionId);
   }
 }
 
-function enqueueChunkBatchStart(): void {
-  chunkQueue = chunkQueue.then(async () => {
-    if (!wasmModule || !activeStream) return;
-    const startBytes = new Uint8Array(wasmModule.chunk_batch_start());
-    if (startBytes.length > 0) {
-      try {
-        await activeStream.write(startBytes);
-      } catch (err) {
-        postMsg({ type: "log", level: "error", category: "transport", message: `Failed to send batch start: ${err}` });
-      }
-    }
-  });
-}
-
-function enqueueChunkData(cx: number, cz: number, blockStates: Uint16Array): void {
-  chunkQueue = chunkQueue.then(async () => {
-    if (!wasmModule || !activeStream) return;
-    const chunkBytes = new Uint8Array(wasmModule.build_chunk(cx, cz, blockStates));
-    if (chunkBytes.length > 0) {
-      try {
-        await activeStream.write(chunkBytes);
-      } catch (err) {
-        postMsg({ type: "log", level: "error", category: "transport", message: `Failed to send chunk: ${err}` });
-      }
-    }
-  });
-}
-
-function enqueueChunkBatchDone(count: number): void {
-  chunkQueue = chunkQueue.then(async () => {
-    if (!wasmModule || !activeStream) return;
-    let finishBytes: Uint8Array;
-    if (isInitialSpawn) {
-      finishBytes = new Uint8Array(wasmModule.play_finish(count));
-      isInitialSpawn = false;
-    } else {
-      finishBytes = new Uint8Array(wasmModule.chunk_batch_end(count));
-    }
-    if (finishBytes.length > 0) {
-      try {
-        await activeStream.write(finishBytes);
-      } catch (err) {
-        postMsg({ type: "log", level: "error", category: "transport", message: `Failed to send finish: ${err}` });
-      }
-    }
-    postMsg({ type: "log", level: "info", category: "protocol", message: `Sent ${count} chunks + batch end to client` });
-
-    batchInFlight = false;
-    if (pendingChunkRequest) {
-      pendingChunkRequest = false;
-      requestChunks();
-    }
-  });
-}
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
 
 function pushStats(): void {
   if (!wasmModule) return;
   try {
-    const statsJson = wasmModule.get_stats() as string;
+    const statsJson = wasmModule.get_aggregate_stats() as string;
     const stats = JSON.parse(statsJson);
     postMsg({ type: "stats", stats });
 
-    const logJson = wasmModule.get_packet_log() as string;
+    const logJson = wasmModule.get_all_packet_logs() as string;
     const entries = JSON.parse(logJson);
     if (entries.length > 0) {
       postMsg({ type: "packet_log", entries });
@@ -565,25 +741,34 @@ function pushStats(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Stop
+// ---------------------------------------------------------------------------
+
 function handleStop(): void {
   if (statsInterval) {
     clearInterval(statsInterval);
     statsInterval = null;
   }
-  activeStream = null;
+  // Close all sessions
+  for (const [id, session] of sessions) {
+    session.stream.close();
+    wasmModule?.remove_connection(id);
+  }
+  sessions.clear();
   controlStream = null;
   if (activeTransport) {
     activeTransport.close();
     activeTransport = null;
   }
-  if (wasmModule) {
-    wasmModule.reset_state();
-  }
   postMsg({ type: "log", level: "info", category: "system", message: "Server stopped" });
   postMsg({ type: "status_change", status: "stopped" });
 }
 
+// ---------------------------------------------------------------------------
 // Message handler
+// ---------------------------------------------------------------------------
+
 self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
   const msg = event.data;
   switch (msg.type) {
@@ -597,26 +782,40 @@ self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
     case "set_config":
       whitelistEnabled = msg.config.whitelist_enabled ?? false;
       whitelist = new Set((msg.config.whitelist ?? []).map((n: string) => n.toLowerCase()));
-      viewDistance = msg.config.render_distance ?? 10;
+      globalViewDistance = msg.config.render_distance ?? 10;
       if (wasmModule) {
         wasmModule.set_server_config(JSON.stringify(msg.config));
+      }
+      // Update view distance for all sessions
+      for (const session of sessions.values()) {
+        session.viewDistance = globalViewDistance;
       }
       break;
     case "queue_chat":
       if (wasmModule) {
-        wasmModule.queue_chat(msg.message);
+        // Broadcast chat to all players
+        broadcastChatMessage(msg.message);
       }
       break;
-    case "chunk_data":
-      enqueueChunkData(msg.cx, msg.cz, msg.blockStates);
+    case "chunk_data": {
+      const session = sessions.get(msg.playerId);
+      if (session) {
+        enqueueChunkData(session, msg.cx, msg.cz, msg.blockStates);
+      }
       break;
-    case "chunk_batch_done":
-      enqueueChunkBatchDone(msg.count);
+    }
+    case "chunk_batch_done": {
+      const session = sessions.get(msg.playerId);
+      if (session) {
+        enqueueChunkBatchDone(session, msg.count);
+      }
       break;
+    }
     case "regenerate_chunks":
-      if (wasmModule && activeStream) {
-        sentChunks.clear();
-        requestChunks();
+      // Regenerate for all connected players
+      for (const session of sessions.values()) {
+        session.sentChunks.clear();
+        requestChunksForSession(session);
       }
       break;
     case "set_public":
