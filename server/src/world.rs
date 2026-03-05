@@ -956,27 +956,49 @@ pub fn build_damage_event_payload(entity_id: i32, source_type_id: i32, attacker_
 }
 
 /// Build Entity Velocity (0x63) payload using lpVec3 format (protocol 773+).
-/// For zero velocity: single 0x00 byte.
-/// For non-zero: simplified encoding.
 pub fn build_entity_velocity_payload(entity_id: i32, vx: f64, vy: f64, vz: f64) -> Vec<u8> {
     let mut p = Vec::new();
     p.extend_from_slice(&write_varint(entity_id));
-    // Convert to 1/8000 units (legacy format, then wrap as lpVec3)
-    let sx = (vx * 8000.0) as i16;
-    let sy = (vy * 8000.0) as i16;
-    let sz = (vz * 8000.0) as i16;
-    if sx == 0 && sy == 0 && sz == 0 {
-        p.push(0x00); // zero velocity
-    } else {
-        // lpVec3 non-zero: pack as 3x i16 BE (simple encoding)
-        // Flag byte: 0x01 = has velocity data, using simple 6-byte i16 format
-        // Actually for protocol 773+ the lpVec3 encoding is complex.
-        // Use the legacy 3x i16 approach for now — many servers still use this.
-        p.extend_from_slice(&sx.to_be_bytes());
-        p.extend_from_slice(&sy.to_be_bytes());
-        p.extend_from_slice(&sz.to_be_bytes());
-    }
+    p.extend_from_slice(&encode_lp_vec3(vx, vy, vz));
     p
+}
+
+/// Encode lpVec3: length-prefixed packed Vec3 (protocol 773+).
+/// Layout: [Z(15)][Y(15)][X(15)][Flags(3)] = 48 bits = 6 bytes LE, plus optional VarInt.
+fn encode_lp_vec3(x: f64, y: f64, z: f64) -> Vec<u8> {
+    const ABS_MIN: f64 = 3.051944088384301e-5;
+
+    let max = x.abs().max(y.abs()).max(z.abs());
+    if max < ABS_MIN {
+        return vec![0x00];
+    }
+
+    let scale = max.ceil() as u32;
+    let scale_f = scale as f64;
+    let needs_continuation = (scale & 3) != scale;
+    let scale_byte: u32 = if needs_continuation { (scale & 3) | 4 } else { scale & 3 };
+
+    let pack = |v: f64| -> u32 {
+        ((v / scale_f * 0.5 + 0.5) * 32766.0).round() as u32
+    };
+    let px = pack(x);
+    let py = pack(y);
+    let pz = pack(z);
+
+    // low32 = Flags(3) | X(15) | Y_low(14)
+    let low32: u32 = (scale_byte | (px << 3) | (py << 18)) & 0xFFFFFFFF;
+    // high16 = Y_high(1) | Z(15)
+    let high16: u16 = (((py >> 14) & 0x01) | (pz << 1)) as u16;
+
+    let mut out = Vec::with_capacity(8);
+    out.extend_from_slice(&low32.to_le_bytes());
+    out.extend_from_slice(&high16.to_le_bytes());
+
+    if needs_continuation {
+        out.extend_from_slice(&write_varint((scale / 4) as i32));
+    }
+
+    out
 }
 
 /// Build Set Health (0x66) payload: health (f32), food (VarInt), saturation (f32).
