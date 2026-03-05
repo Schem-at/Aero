@@ -724,8 +724,8 @@ pub fn build_spawn_entity_payload(entity_id: i32, uuid: &str, x: f64, y: f64, z:
     } else {
         p.extend_from_slice(&[0u8; 16]);
     }
-    // Type (VarInt) — minecraft:player = 148 in protocol 774
-    p.extend_from_slice(&write_varint(148));
+    // Type (VarInt) — minecraft:player = 155 in protocol 774 (1.21.11)
+    p.extend_from_slice(&write_varint(155));
     // X, Y, Z (f64)
     p.extend_from_slice(&x.to_be_bytes());
     p.extend_from_slice(&y.to_be_bytes());

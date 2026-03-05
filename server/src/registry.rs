@@ -87,41 +87,87 @@ fn build_damage_type_entry(message_id: &str, exhaustion: f32, scaling: &str) -> 
     nbt.finish()
 }
 
+fn build_damage_type_entry_ext(message_id: &str, exhaustion: f32, scaling: &str, effects: Option<&str>, death_message_type: Option<&str>) -> Vec<u8> {
+    let mut nbt = NbtWriter::new();
+    nbt.string("message_id", message_id);
+    nbt.float("exhaustion", exhaustion);
+    nbt.string("scaling", scaling);
+    if let Some(fx) = effects {
+        nbt.string("effects", fx);
+    }
+    if let Some(dmt) = death_message_type {
+        nbt.string("death_message_type", dmt);
+    }
+    nbt.finish()
+}
+
 fn build_damage_type_registry() -> Vec<u8> {
-    let damage_types: Vec<(&str, &str, f32, &str)> = vec![
+    // Complete vanilla damage type registry (1.21.5 / protocol 770+)
+    // Source: misode/mcmeta 1.21.5-data
+    let mut entries: Vec<(&str, Option<Vec<u8>>)> = Vec::new();
+
+    // Simple damage types: (id, message_id, exhaustion, scaling)
+    let simple: Vec<(&str, &str, f32, &str)> = vec![
+        ("minecraft:arrow", "arrow", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:cactus", "cactus", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:campfire", "campfire", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:cramming", "cramming", 0.0, "never"),
+        ("minecraft:dragon_breath", "dragonBreath", 0.0, "never"),
+        ("minecraft:drown", "drown", 0.0, "never"),
+        ("minecraft:dry_out", "dryOut", 0.1, "never"),
+        ("minecraft:ender_pearl", "fall", 0.0, "when_caused_by_living_non_player"),
+        ("minecraft:explosion", "explosion", 0.1, "always"),
+        ("minecraft:fall", "fall", 0.0, "when_caused_by_living_non_player"),
+        ("minecraft:falling_anvil", "anvil", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:falling_block", "fallingBlock", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:falling_stalactite", "fallingStalactite", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:fireworks", "fireworks", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:fly_into_wall", "flyIntoWall", 0.0, "never"),
+        ("minecraft:freeze", "freeze", 0.0, "never"),
         ("minecraft:generic", "generic", 0.0, "when_caused_by_living_non_player"),
         ("minecraft:generic_kill", "genericKill", 0.0, "never"),
-        ("minecraft:in_fire", "inFire", 0.1, "when_caused_by_living_non_player"),
-        ("minecraft:on_fire", "onFire", 0.0, "never"),
-        ("minecraft:lava", "lava", 0.1, "when_caused_by_living_non_player"),
         ("minecraft:hot_floor", "hotFloor", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:in_fire", "inFire", 0.1, "when_caused_by_living_non_player"),
         ("minecraft:in_wall", "inWall", 0.0, "never"),
-        ("minecraft:cramming", "cramming", 0.0, "never"),
-        ("minecraft:drown", "drown", 0.0, "never"),
-        ("minecraft:starve", "starve", 0.0, "never"),
-        ("minecraft:cactus", "cactus", 0.1, "when_caused_by_living_non_player"),
-        ("minecraft:fall", "fall", 0.0, "when_caused_by_living_non_player"),
-        ("minecraft:fly_into_wall", "flyIntoWall", 0.0, "never"),
-        ("minecraft:out_of_world", "outOfWorld", 0.0, "never"),
-        ("minecraft:magic", "magic", 0.0, "never"),
-        ("minecraft:dry_out", "dryOut", 0.1, "never"),
-        ("minecraft:freeze", "freeze", 0.0, "never"),
+        ("minecraft:indirect_magic", "indirectMagic", 0.0, "when_caused_by_living_non_player"),
+        ("minecraft:lava", "lava", 0.1, "when_caused_by_living_non_player"),
         ("minecraft:lightning_bolt", "lightningBolt", 0.1, "when_caused_by_living_non_player"),
-        ("minecraft:sweet_berry_bush", "sweetBerryBush", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:mace_smash", "mace_smash", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:magic", "magic", 0.0, "never"),
+        ("minecraft:mob_attack", "mob", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:mob_attack_no_aggro", "mob", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:mob_projectile", "mob", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:on_fire", "onFire", 0.0, "never"),
+        ("minecraft:out_of_world", "outOfWorld", 0.0, "never"),
         ("minecraft:outside_border", "outsideBorder", 0.0, "never"),
+        ("minecraft:player_attack", "player", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:player_explosion", "explosion.player", 0.1, "always"),
+        ("minecraft:sonic_boom", "sonic_boom", 0.0, "always"),
+        ("minecraft:spit", "mob", 0.1, "when_caused_by_living_non_player"),
         ("minecraft:stalagmite", "stalagmite", 0.0, "when_caused_by_living_non_player"),
-        ("minecraft:campfire", "campfire", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:starve", "starve", 0.0, "never"),
+        ("minecraft:sting", "sting", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:sweet_berry_bush", "sweetBerryBush", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:thrown", "thrown", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:trident", "trident", 0.1, "when_caused_by_living_non_player"),
+        ("minecraft:wind_charge", "mob", 0.1, "when_caused_by_living_non_player"),
         ("minecraft:wither", "wither", 0.0, "never"),
-        ("minecraft:dragon_breath", "dragonBreath", 0.0, "never"),
-        ("minecraft:ender_pearl", "fall", 0.0, "when_caused_by_living_non_player"),
+        ("minecraft:wither_skull", "witherSkull", 0.1, "when_caused_by_living_non_player"),
     ];
 
-    let entries: Vec<(&str, Option<Vec<u8>>)> = damage_types
-        .iter()
-        .map(|(id, msg, exh, scaling)| {
-            (*id, Some(build_damage_type_entry(msg, *exh, scaling)))
-        })
-        .collect();
+    for (id, msg, exh, scaling) in &simple {
+        entries.push((*id, Some(build_damage_type_entry(msg, *exh, scaling))));
+    }
+
+    // Entries with extra fields
+    entries.push(("minecraft:bad_respawn_point", Some(build_damage_type_entry_ext(
+        "badRespawnPoint", 0.1, "always", None, Some("intentional_game_design")))));
+    entries.push(("minecraft:fireball", Some(build_damage_type_entry_ext(
+        "fireball", 0.1, "when_caused_by_living_non_player", Some("burning"), None))));
+    entries.push(("minecraft:thorns", Some(build_damage_type_entry_ext(
+        "thorns", 0.1, "when_caused_by_living_non_player", Some("thorns"), None))));
+    entries.push(("minecraft:unattributed_fireball", Some(build_damage_type_entry_ext(
+        "onFire", 0.1, "when_caused_by_living_non_player", Some("burning"), None))));
 
     build_registry_packet("minecraft:damage_type", &entries)
 }
