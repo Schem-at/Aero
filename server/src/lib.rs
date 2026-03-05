@@ -311,7 +311,11 @@ mod wasm_exports {
             let mut pool = p.borrow_mut();
             if let Some(conn) = pool.connections.get_mut(&id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
-                let data = crate::world::build_play_finish(chunk_count, threshold);
+                let data = crate::world::build_play_finish_at(
+                    chunk_count, threshold,
+                    conn.player_x, conn.player_y, conn.player_z,
+                    conn.player_yaw, conn.player_pitch,
+                );
                 conn.awaiting_chunks = false;
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;

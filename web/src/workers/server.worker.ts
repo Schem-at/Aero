@@ -453,7 +453,7 @@ function enqueueChunkBatchStart(session: ClientSession): void {
     if (startBytes.length > 0) {
       try { await session.stream.write(startBytes); } catch {}
     }
-  });
+  }).catch(() => {});
 }
 
 function enqueueChunkData(session: ClientSession, cx: number, cz: number, blockStates: Uint16Array): void {
@@ -463,7 +463,7 @@ function enqueueChunkData(session: ClientSession, cx: number, cz: number, blockS
     if (chunkBytes.length > 0) {
       try { await session.stream.write(chunkBytes); } catch {}
     }
-  });
+  }).catch(() => {});
 }
 
 function enqueueChunkBatchDone(session: ClientSession, count: number): void {
@@ -480,7 +480,7 @@ function enqueueChunkBatchDone(session: ClientSession, count: number): void {
       try { await session.stream.write(finishBytes); } catch {}
     }
     postMsg({ type: "log", level: "info", category: "protocol", message: `[${session.username || "?"}] Sent ${count} chunks + batch end` });
-
+  }).catch(() => {}).finally(() => {
     session.batchInFlight = false;
     if (session.pendingChunkRequest) {
       session.pendingChunkRequest = false;

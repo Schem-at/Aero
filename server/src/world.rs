@@ -41,9 +41,14 @@ pub fn build_chunk_from_blocks(cx: i32, cz: i32, block_states: &[u16], threshold
 
 /// Build finish packets: Chunk Batch Finished + Synchronize Player Position (initial spawn only).
 pub fn build_play_finish(chunk_count: i32, threshold: i32) -> Vec<u8> {
+    build_play_finish_at(chunk_count, threshold, 8.0, 66.0, 8.0, 0.0, 0.0)
+}
+
+/// Build finish packets using the player's actual position.
+pub fn build_play_finish_at(chunk_count: i32, threshold: i32, x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
     let mut result = Vec::new();
     result.extend_from_slice(&compress_packet(0x0B, &build_chunk_batch_finished(chunk_count), threshold));
-    result.extend_from_slice(&compress_packet(0x46, &build_sync_player_position(), threshold));
+    result.extend_from_slice(&compress_packet(0x46, &build_sync_player_position_at(x, y, z, yaw, pitch), threshold));
     result
 }
 
