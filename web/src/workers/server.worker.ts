@@ -15,6 +15,13 @@ function postMsg(msg: WorkerToMainMessage) {
   self.postMessage(msg);
 }
 
+// Catch unhandled promise rejections so they surface as logs
+self.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason;
+  const msg = reason instanceof Error ? `${reason.message}\n${reason.stack}` : String(reason);
+  postMsg({ type: "log", level: "error", category: "system", message: `Unhandled rejection: ${msg}` });
+});
+
 // ---------------------------------------------------------------------------
 // Transport abstraction — works over WebTransport or WebSocket
 // ---------------------------------------------------------------------------
@@ -461,7 +468,12 @@ function enqueueChunkBatchDone(session: ClientSession, count: number): void {
 async function initWasm(): Promise<void> {
   if (wasmModule) return;
   const mod = await import("../../public/wasm/aero_server");
-  await mod.default();
+  // Pass explicit URL to avoid import.meta.url issues in bundled workers
+  // and add cache-buster to prevent stale .wasm binary from browser cache
+  await mod.default(new URL(`/wasm/aero_server_bg.wasm?v=${Date.now()}`, self.location.origin));
+  if (typeof mod.create_connection !== "function") {
+    throw new Error(`WASM module missing create_connection. Available exports: ${Object.keys(mod).join(", ")}`);
+  }
   wasmModule = mod;
 }
 

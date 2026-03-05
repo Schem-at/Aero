@@ -58,8 +58,11 @@ export class ServerBridge {
     };
 
     this.worker.onerror = (err) => {
-      this.onLog?.("error", "system", `Worker error: ${err.message}`);
-      this.onStatusChange?.("error", err.message);
+      const msg = err.message || err.filename
+        ? `${err.message ?? "Unknown error"} (${err.filename ?? "?"}:${err.lineno ?? "?"})`
+        : "Worker crashed with unknown error";
+      this.onLog?.("error", "system", `Worker error: ${msg}`);
+      this.onStatusChange?.("error", msg);
     };
 
     this.send({ type: "start", wtUrl, wsUrl, certHash, config, subdomain });
