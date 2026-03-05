@@ -711,6 +711,63 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         requestChunksForSession(session);
       }
 
+      // Check for /tp <player> deferred from WASM
+      if (playerJoined) {
+        const tpTarget = wasmModule.get_pending_tp(connectionId) as string;
+        if (tpTarget) {
+          wasmModule.clear_pending_tp(connectionId);
+          // Find target player by username (case-insensitive)
+          const targetLower = tpTarget.toLowerCase();
+          let found = false;
+          for (const [, other] of sessions) {
+            if (other.connectionId === connectionId) continue;
+            if (!other.inPlay) continue;
+            if (other.username.toLowerCase() === targetLower) {
+              const msg = `Teleported to ${other.username}`;
+              const tpBytes = new Uint8Array(
+                wasmModule.teleport_player(connectionId, other.x, other.y, other.z, msg)
+              );
+              if (tpBytes.length > 0) {
+                await stream.write(tpBytes);
+              }
+              // teleport_player sets awaiting_chunks, so request chunks
+              if (wasmModule.get_awaiting_chunks(connectionId)) {
+                wasmModule.clear_awaiting_chunks(connectionId);
+                requestChunksForSession(session);
+              }
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            const errMsg = `Player "${tpTarget}" not found`;
+            const chatBytes = new Uint8Array(wasmModule.build_system_chat(connectionId, errMsg));
+            if (chatBytes.length > 0) {
+              await stream.write(chatBytes);
+            }
+          }
+        }
+      }
+
+      // Check for in-game chat broadcast (relay to other players)
+      if (playerJoined) {
+        const chatMsg = wasmModule.get_pending_chat_broadcast(connectionId) as string;
+        if (chatMsg) {
+          wasmModule.clear_pending_chat_broadcast(connectionId);
+          // Send to all OTHER players
+          for (const [, other] of sessions) {
+            if (other.connectionId === connectionId) continue;
+            if (!other.inPlay) continue;
+            try {
+              const bytes = new Uint8Array(wasmModule.build_system_chat(other.connectionId, chatMsg));
+              if (bytes.length > 0) {
+                other.stream.write(bytes).catch(() => {});
+              }
+            } catch {}
+          }
+        }
+      }
+
       // Check for position/rotation updates from WASM (dirty flag)
       if (playerJoined) {
         const posStr = wasmModule.get_player_position(connectionId) as string;

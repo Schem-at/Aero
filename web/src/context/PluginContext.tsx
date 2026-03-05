@@ -30,6 +30,7 @@ interface PluginContextValue {
   setActiveGenerator: (id: string) => void;
   registerPlugin: (plugin: Plugin) => void;
   generateChunks: (chunks: { cx: number; cz: number }[]) => Promise<ChunkResult[]>;
+  clearChunkCache: () => void;
   worldGenStats: WorldGenStats;
 }
 
@@ -52,6 +53,26 @@ const initialGenStats: WorldGenStats = {
   totalTimeMs: 0,
 };
 
+// Chunk cache: avoids regenerating the same chunk for multiple players
+const MAX_CACHE_SIZE = 800;
+const chunkCache = new Map<string, Uint16Array>();
+const pendingChunks = new Map<string, Promise<Uint16Array>>();
+
+function chunkKey(cx: number, cz: number): string {
+  return `${cx},${cz}`;
+}
+
+function evictCache(): void {
+  if (chunkCache.size <= MAX_CACHE_SIZE) return;
+  // Delete oldest entries (Map preserves insertion order)
+  const excess = chunkCache.size - MAX_CACHE_SIZE;
+  const iter = chunkCache.keys();
+  for (let i = 0; i < excess; i++) {
+    const key = iter.next().value;
+    if (key) chunkCache.delete(key);
+  }
+}
+
 export function PluginProvider({ children }: { children: ReactNode }) {
   const [plugins, setPlugins] = useState<Plugin[]>(builtinPlugins);
   const [activeGeneratorId, setActiveGeneratorId] = useState("flat");
@@ -71,6 +92,9 @@ export function PluginProvider({ children }: { children: ReactNode }) {
       if (gen.init) await gen.init();
       setActiveGeneratorId(id);
       generatorRef.current = gen;
+      // Clear cache — new generator produces different terrain
+      chunkCache.clear();
+      pendingChunks.clear();
     }
   }, [plugins]);
 
@@ -81,31 +105,69 @@ export function PluginProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const clearChunkCache = useCallback(() => {
+    chunkCache.clear();
+    pendingChunks.clear();
+  }, []);
+
   const generateChunks = useCallback(async (chunks: { cx: number; cz: number }[]): Promise<ChunkResult[]> => {
     const gen = generatorRef.current;
     const batchSize = chunks.length;
 
-    // Mark pending
     setWorldGenStats((prev) => ({ ...prev, pendingChunks: prev.pendingChunks + batchSize }));
 
     const t0 = performance.now();
     const results: ChunkResult[] = [];
+    let generated = 0;
+    let cacheHits = 0;
     try {
-      for (const { cx, cz } of chunks) {
-        const data: ChunkData = await gen.generate(cx, cz);
-        results.push({ cx, cz, blockStates: data.blockStates });
-      }
+      // Launch all chunk generations concurrently, deduping via cache + in-flight map
+      const promises = chunks.map(async ({ cx, cz }): Promise<ChunkResult> => {
+        const key = chunkKey(cx, cz);
+
+        // 1. Check cache
+        const cached = chunkCache.get(key);
+        if (cached) {
+          cacheHits++;
+          return { cx, cz, blockStates: cached };
+        }
+
+        // 2. Check in-flight — reuse if another player already requested this chunk
+        const pending = pendingChunks.get(key);
+        if (pending) {
+          const bs = await pending;
+          cacheHits++;
+          return { cx, cz, blockStates: bs };
+        }
+
+        // 3. Generate — store promise so concurrent requests dedup
+        const genPromise = Promise.resolve(gen.generate(cx, cz)).then((data: ChunkData) => {
+          const bs = data.blockStates;
+          chunkCache.set(key, bs);
+          pendingChunks.delete(key);
+          evictCache();
+          return bs;
+        });
+        pendingChunks.set(key, genPromise);
+
+        const bs = await genPromise;
+        generated++;
+        return { cx, cz, blockStates: bs };
+      });
+
+      // Await all — GPU calls are still serialized internally by WebGPU,
+      // but cache hits resolve instantly and in-flight dedup avoids double work
+      const settled = await Promise.all(promises);
+      results.push(...settled);
     } finally {
       const elapsed = performance.now() - t0;
-      // Always decrement pending — even if generation threw partway through
       setWorldGenStats((prev) => {
-        const generated = results.length;
         const totalChunks = prev.chunksGenerated + generated;
         const totalTime = prev.totalTimeMs + elapsed;
         return {
           chunksGenerated: totalChunks,
           pendingChunks: Math.max(0, prev.pendingChunks - batchSize),
-          lastBatchSize: generated,
+          lastBatchSize: batchSize,
           lastBatchTimeMs: elapsed,
           avgChunkTimeMs: totalChunks > 0 ? totalTime / totalChunks : 0,
           totalTimeMs: totalTime,
@@ -124,6 +186,7 @@ export function PluginProvider({ children }: { children: ReactNode }) {
         setActiveGenerator,
         registerPlugin,
         generateChunks,
+        clearChunkCache,
         worldGenStats,
       }}
     >

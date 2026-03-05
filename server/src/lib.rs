@@ -605,6 +605,104 @@ mod wasm_exports {
         })
     }
 
+    /// Get pending tp target (player name) if set by /tp <player>.
+    #[wasm_bindgen]
+    pub fn get_pending_tp(id: u32) -> String {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            if let Some(conn) = pool.connections.get(&id) {
+                conn.pending_tp_target.clone().unwrap_or_default()
+            } else {
+                String::new()
+            }
+        })
+    }
+
+    /// Clear pending tp target.
+    #[wasm_bindgen]
+    pub fn clear_pending_tp(id: u32) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.pending_tp_target = None;
+            }
+        })
+    }
+
+    /// Get pending chat broadcast message (set by in-game chat).
+    #[wasm_bindgen]
+    pub fn get_pending_chat_broadcast(id: u32) -> String {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            if let Some(conn) = pool.connections.get(&id) {
+                conn.pending_chat_broadcast.clone().unwrap_or_default()
+            } else {
+                String::new()
+            }
+        })
+    }
+
+    /// Clear pending chat broadcast.
+    #[wasm_bindgen]
+    pub fn clear_pending_chat_broadcast(id: u32) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.pending_chat_broadcast = None;
+            }
+        })
+    }
+
+    /// Teleport a player to coordinates (called from JS after resolving /tp <player>).
+    /// Returns the encrypted response bytes (Set Center Chunk + Sync Position + chat).
+    #[wasm_bindgen]
+    pub fn teleport_player(id: u32, x: f64, y: f64, z: f64, message: &str) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+
+                conn.player_x = x;
+                conn.player_y = y;
+                conn.player_z = z;
+                conn.position_dirty = true;
+
+                let chunk_x = (x.floor() as i32) >> 4;
+                let chunk_z = (z.floor() as i32) >> 4;
+                conn.player_chunk_x = chunk_x;
+                conn.player_chunk_z = chunk_z;
+                conn.pending_chunk_center = Some((chunk_x, chunk_z));
+                conn.awaiting_chunks = true;
+
+                let mut data = Vec::new();
+                // Set Center Chunk
+                let mut view_pos = Vec::new();
+                view_pos.extend_from_slice(&crate::protocol::types::write_varint(chunk_x));
+                view_pos.extend_from_slice(&crate::protocol::types::write_varint(chunk_z));
+                data.extend_from_slice(&crate::compression::compress_packet(0x5C, &view_pos, threshold));
+                // Sync Position
+                data.extend_from_slice(&crate::compression::compress_packet(
+                    0x46,
+                    &crate::world::build_sync_player_position_at(x, y, z, conn.player_yaw, conn.player_pitch),
+                    threshold,
+                ));
+                // Chat confirmation
+                data.extend_from_slice(&crate::compression::compress_packet(
+                    0x77,
+                    &crate::world::build_system_chat_payload(message),
+                    threshold,
+                ));
+
+                if let Some(ref mut cipher) = conn.cipher {
+                    cipher.encrypt(&mut data);
+                }
+                data
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
     /// Get the player's position if it changed since last call.
     /// Returns empty string if no change, or JSON {x,y,z,yaw,pitch} if dirty.
     #[wasm_bindgen]

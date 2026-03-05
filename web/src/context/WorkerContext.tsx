@@ -28,7 +28,7 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
   const { addLog, clearLogs } = useLogs();
   const { pushStats, pushPacketLog } = useStats();
   const { config } = useServerConfig();
-  const { generateChunks } = usePlugins();
+  const { generateChunks, clearChunkCache } = usePlugins();
   const bridgeRef = useRef<ServerBridge | null>(null);
 
   // Keep a ref to generateChunks so the callback doesn't go stale
@@ -65,7 +65,7 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
         const gen = generateChunksRef.current;
         const results = await gen(chunks);
         for (const { cx, cz, blockStates } of results) {
-          bridge.sendChunkData(playerId, cx, cz, blockStates);
+          bridge.sendChunkData(playerId, cx, cz, new Uint16Array(blockStates));
         }
         bridge.sendChunkBatchDone(playerId, results.length);
       } catch (err) {
@@ -105,8 +105,9 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const regenerateChunks = useCallback(() => {
+    clearChunkCache();
     bridgeRef.current?.regenerateChunks();
-  }, []);
+  }, [clearChunkCache]);
 
   const setPublic = useCallback((isPublic: boolean) => {
     bridgeRef.current?.setPublic(isPublic);

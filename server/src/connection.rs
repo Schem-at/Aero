@@ -68,6 +68,8 @@ pub struct Connection {
     pub player_yaw: f32,
     pub player_pitch: f32,
     pub position_dirty: bool,
+    pub pending_tp_target: Option<String>,
+    pub pending_chat_broadcast: Option<String>,
     logger: Box<dyn Logger>,
     registry: PacketRegistry,
 }
@@ -100,6 +102,8 @@ impl Connection {
             player_yaw: 0.0,
             player_pitch: 0.0,
             position_dirty: false,
+            pending_tp_target: None,
+            pending_chat_broadcast: None,
             logger,
             registry: PacketRegistry::default_registry(),
         }
@@ -127,6 +131,8 @@ impl Connection {
         self.player_yaw = 0.0;
         self.player_pitch = 0.0;
         self.position_dirty = false;
+        self.pending_tp_target = None;
+        self.pending_chat_broadcast = None;
         self.stats.player_count = 0;
         self.stats.connected_at_ms = 0.0;
         self.log(LogLevel::Debug, LogCategory::System, "Connection state reset to Handshaking");
@@ -225,6 +231,8 @@ impl Connection {
                 player_yaw: &mut self.player_yaw,
                 player_pitch: &mut self.player_pitch,
                 position_dirty: &mut self.position_dirty,
+                pending_tp_target: &mut self.pending_tp_target,
+                pending_chat_broadcast: &mut self.pending_chat_broadcast,
             };
 
             let result = handler.handle(&payload, &mut ctx);

@@ -18,6 +18,9 @@ impl PacketHandler for ChatMessageHandler {
         let formatted = format!("<{}> {}", username, message);
         ctx.log(LogLevel::Info, LogCategory::Chat, &formatted);
 
+        // Store for JS worker to broadcast to other players
+        *ctx.pending_chat_broadcast = Some(formatted.clone());
+
         // Echo the message back to the client as System Chat
         let threshold = ctx.compression_threshold.unwrap_or(256);
         let chat = compress_packet(0x77, &world::build_system_chat_payload(&formatted), threshold);

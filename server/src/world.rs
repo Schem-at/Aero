@@ -27,9 +27,8 @@ pub fn build_play_init(
     result.extend_from_slice(&compress_packet(0x10, &build_commands(), threshold));
     // Set Time (0x6F) — noon, time progresses naturally
     result.extend_from_slice(&compress_packet(0x6F, &build_set_time(0, 6000, true), threshold));
-    // View position + chunk batch start
+    // View position (chunk batch start is sent by the worker before chunks)
     result.extend_from_slice(&compress_packet(0x5C, &build_update_view_position(), threshold));
-    result.extend_from_slice(&compress_packet(0x0C, &[], threshold));
     result
 }
 
@@ -593,8 +592,8 @@ pub fn build_player_info_update(uuid: &str, username: &str, properties: &[(Strin
 pub fn build_commands() -> Vec<u8> {
     let mut p = Vec::new();
 
-    // Node count: 15
-    p.extend_from_slice(&write_varint(15));
+    // Node count: 16
+    p.extend_from_slice(&write_varint(16));
 
     // Node 0: Root
     p.push(0x00); // type=root
@@ -671,8 +670,9 @@ pub fn build_commands() -> Vec<u8> {
 
     // Node 11: Literal "tp"
     p.push(0x01); // type=literal
-    p.extend_from_slice(&write_varint(1)); // 1 child
+    p.extend_from_slice(&write_varint(2)); // 2 children: player name OR x coord
     p.extend_from_slice(&write_varint(12)); // x
+    p.extend_from_slice(&write_varint(15)); // player
     p.extend_from_slice(&write_string("tp"));
 
     // Node 12: Argument "x" double
@@ -697,6 +697,13 @@ pub fn build_commands() -> Vec<u8> {
     p.extend_from_slice(&write_string("z"));
     p.extend_from_slice(&write_varint(6)); // parser=double
     p.push(0x00);
+
+    // Node 15: Argument "player" (entity selector), executable
+    p.push(0x04 | 0x02); // type=argument + executable
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("player"));
+    p.extend_from_slice(&write_varint(7)); // parser=string (single word)
+    p.extend_from_slice(&write_varint(0)); // SINGLE_WORD
 
     // Root index
     p.extend_from_slice(&write_varint(0));

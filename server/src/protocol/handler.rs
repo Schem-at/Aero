@@ -36,6 +36,8 @@ pub struct HandlerContext<'a> {
     pub player_yaw: &'a mut f32,
     pub player_pitch: &'a mut f32,
     pub position_dirty: &'a mut bool,
+    pub pending_tp_target: &'a mut Option<String>,
+    pub pending_chat_broadcast: &'a mut Option<String>,
 }
 
 impl<'a> HandlerContext<'a> {
