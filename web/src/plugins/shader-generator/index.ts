@@ -1,5 +1,11 @@
 import type { WorldGenerator, ChunkData } from "@/types/plugin";
 import { buildComputeShader, DEFAULT_SHADER } from "./boilerplate";
+import { parseShaderParams, type ShaderParam } from "./params";
+
+/** Round up to next multiple of 16 (WebGPU uniform buffer alignment). */
+function align16(n: number): number {
+  return Math.ceil(n / 16) * 16;
+}
 
 export class ShaderGenerator implements WorldGenerator {
   id = "shader";
@@ -14,6 +20,11 @@ export class ShaderGenerator implements WorldGenerator {
 
   private _shaderCode: string = DEFAULT_SHADER;
   private _lastError: string | null = null;
+  private _params: ShaderParam[] = [];
+  private _paramValues: Map<string, number> = new Map();
+
+  /** Called when params list changes (after setShaderCode). */
+  onParamsChanged: ((params: ShaderParam[], values: Map<string, number>) => void) | null = null;
 
   get shaderCode(): string {
     return this._shaderCode;
@@ -21,6 +32,14 @@ export class ShaderGenerator implements WorldGenerator {
 
   get lastError(): string | null {
     return this._lastError;
+  }
+
+  get params(): ShaderParam[] {
+    return this._params;
+  }
+
+  get paramValues(): Map<string, number> {
+    return this._paramValues;
   }
 
   async init(): Promise<void> {
@@ -37,13 +56,6 @@ export class ShaderGenerator implements WorldGenerator {
 
     this.device = await adapter.requestDevice();
 
-    // Create buffers
-    // Uniform: 2 x i32 (chunk_x, chunk_z) = 8 bytes
-    this.uniformBuffer = this.device.createBuffer({
-      size: 8,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
     // Output: 98304 x u32 = 393216 bytes
     const outputSize = 98304 * 4;
     this.outputBuffer = this.device.createBuffer({
@@ -56,7 +68,7 @@ export class ShaderGenerator implements WorldGenerator {
       usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
     });
 
-    // Compile default shader
+    // Compile default shader (this creates the uniform buffer)
     await this.setShaderCode(this._shaderCode);
   }
 
@@ -69,7 +81,27 @@ export class ShaderGenerator implements WorldGenerator {
       return;
     }
 
-    const fullShader = buildComputeShader(code);
+    // Parse params from code
+    const newParams = parseShaderParams(code);
+
+    // Merge values: keep existing for same-name params, use defaults for new ones
+    const newValues = new Map<string, number>();
+    for (const p of newParams) {
+      newValues.set(p.name, this._paramValues.get(p.name) ?? p.defaultValue);
+    }
+    this._params = newParams;
+    this._paramValues = newValues;
+
+    // Recreate uniform buffer sized for chunk coords + params
+    // Layout: [chunk_x: i32, chunk_z: i32, param0: f32, param1: f32, ...]
+    const uniformSize = align16(8 + 4 * newParams.length);
+    this.uniformBuffer?.destroy();
+    this.uniformBuffer = this.device.createBuffer({
+      size: uniformSize,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const fullShader = buildComputeShader(code, newParams);
 
     try {
       const shaderModule = this.device.createShaderModule({ code: fullShader });
@@ -79,6 +111,7 @@ export class ShaderGenerator implements WorldGenerator {
       const errors = info.messages.filter((m: GPUCompilationMessage) => m.type === "error");
       if (errors.length > 0) {
         this._lastError = errors.map((e: GPUCompilationMessage) => `Line ${e.lineNum}: ${e.message}`).join("\n");
+        this.onParamsChanged?.(this._params, this._paramValues);
         return;
       }
 
@@ -100,30 +133,45 @@ export class ShaderGenerator implements WorldGenerator {
     } catch (err) {
       this._lastError = err instanceof Error ? err.message : String(err);
     }
+
+    this.onParamsChanged?.(this._params, this._paramValues);
+  }
+
+  setParamValue(name: string, value: number): void {
+    this._paramValues.set(name, value);
   }
 
   async generate(cx: number, cz: number): Promise<ChunkData> {
     if (!this.device || !this.pipeline || !this.bindGroup) {
-      // Fallback: return empty chunk
       return { blockStates: new Uint16Array(98304) };
     }
 
-    // Write uniforms
-    this.device.queue.writeBuffer(
-      this.uniformBuffer!,
-      0,
-      new Int32Array([cx, cz])
-    );
+    // Build uniform data: [chunk_x: i32, chunk_z: i32, ...params: f32]
+    const paramCount = this._params.length;
+    const bufferSize = align16(8 + 4 * paramCount);
+    const buf = new ArrayBuffer(bufferSize);
+    const i32View = new Int32Array(buf, 0, 2);
+    i32View[0] = cx;
+    i32View[1] = cz;
+
+    if (paramCount > 0) {
+      const f32View = new Float32Array(buf, 8, paramCount);
+      for (let i = 0; i < paramCount; i++) {
+        const p = this._params[i];
+        f32View[i] = this._paramValues.get(p.name) ?? p.defaultValue;
+      }
+    }
+
+    this.device.queue.writeBuffer(this.uniformBuffer!, 0, buf);
 
     // Dispatch compute
     const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginComputePass();
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
-    pass.dispatchWorkgroups(16, 16, 1); // 16x16 columns
+    pass.dispatchWorkgroups(16, 16, 1);
     pass.end();
 
-    // Copy output to read buffer
     encoder.copyBufferToBuffer(
       this.outputBuffer!,
       0,
@@ -134,12 +182,10 @@ export class ShaderGenerator implements WorldGenerator {
 
     this.device.queue.submit([encoder.finish()]);
 
-    // Read back results
     await this.readBuffer!.mapAsync(GPUMapMode.READ);
     const data = new Uint32Array(this.readBuffer!.getMappedRange().slice(0));
     this.readBuffer!.unmap();
 
-    // Convert u32 → u16
     const blockStates = new Uint16Array(98304);
     for (let i = 0; i < 98304; i++) {
       blockStates[i] = data[i] & 0xFFFF;

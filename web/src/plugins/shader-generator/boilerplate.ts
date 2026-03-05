@@ -64,6 +64,16 @@ const BLACK_CONCRETE: u32 = 14843u;
 export const DEFAULT_SHADER = `// Procedural terrain with hills, caves, ores, water & hex ceiling
 // generate(x, y, z) → block state ID — y ranges from -64 to 319
 
+// @param terrain_scale: slider(0.001, 0.02, 0.001) = 0.005
+// @param terrain_detail: slider(0.01, 0.1, 0.005) = 0.02
+// @param terrain_height: slider(20, 160, 1) = 80
+// @param detail_height: slider(2, 40, 1) = 20
+// @param base_offset: slider(-20, 80, 1) = 20
+// @param sea_level: slider(0, 128, 1) = 62
+// @param enable_caves: toggle = true
+// @param ceiling_y: slider(128, 300, 1) = 200
+// @param hex_size: slider(2, 20, 0.5) = 8
+
 // ---- hash-based value noise ----
 fn hash2(p: vec2<f32>) -> f32 {
   var q = fract(p * vec2<f32>(123.34, 456.21));
@@ -155,34 +165,33 @@ fn hex_dist(p: vec2<f32>, size: f32) -> vec2<f32> {
   return vec2<f32>(cell_hash, edge_dist);
 }
 
-// ---- terrain parameters ----
-const SEA_LEVEL: i32 = 62;
-const CEILING_Y: i32 = 200;
-const HEX_SIZE: f32 = 8.0;
+// ---- terrain parameters (driven by @param uniforms) ----
 
 fn terrain_height(x: i32, z: i32) -> i32 {
   let p = vec2<f32>(f32(x), f32(z));
-  let h = fbm2(p * 0.005) * 80.0
-        + fbm2(p * 0.02 + 100.0) * 20.0
+  let h = fbm2(p * u.terrain_scale) * u.terrain_height
+        + fbm2(p * u.terrain_detail + 100.0) * u.detail_height
         + fbm2(p * 0.05 + 300.0) * 6.0;
-  return i32(h) + 20;
+  return i32(h) + i32(u.base_offset);
 }
 
 // hex ceiling: colored glass pattern with glowstone frame
 fn ceiling_block(x: i32, z: i32, y: i32) -> u32 {
   let p = vec2<f32>(f32(x), f32(z));
-  let hex = hex_dist(p, HEX_SIZE);
+  let hex = hex_dist(p, u.hex_size);
   let cell = hex.x;
   let edge = hex.y;
 
+  let ceil_y = i32(u.ceiling_y);
+
   // frame (edges of hexagons)
   if (edge > 0.85) {
-    if (y == CEILING_Y) { return GLOWSTONE; }
+    if (y == ceil_y) { return GLOWSTONE; }
     return OBSIDIAN;
   }
 
   // only one layer thick for the colored fill
-  if (y != CEILING_Y) { return AIR; }
+  if (y != ceil_y) { return AIR; }
 
   // pick color per hex cell
   let c = u32(cell * 16.0);
@@ -207,8 +216,9 @@ fn ceiling_block(x: i32, z: i32, y: i32) -> u32 {
 }
 
 fn generate(x: i32, y: i32, z: i32) -> u32 {
-  // ---- hex ceiling at Y=200..201 ----
-  if (y >= CEILING_Y && y <= CEILING_Y + 1) {
+  // ---- hex ceiling ----
+  let ceiling = i32(u.ceiling_y);
+  if (y >= ceiling && y <= ceiling + 1) {
     let cb = ceiling_block(x, z, y);
     if (cb != AIR) { return cb; }
   }
@@ -223,16 +233,18 @@ fn generate(x: i32, y: i32, z: i32) -> u32 {
 
   // above terrain — air or water
   if (y > height) {
-    if (y <= SEA_LEVEL) { return WATER; }
+    if (y <= i32(u.sea_level)) { return WATER; }
     return AIR;
   }
 
-  // caves
-  let cave = fbm3(vec3<f32>(f32(x), f32(y), f32(z)) * 0.04);
-  let cave2 = noise3(vec3<f32>(f32(x), f32(y), f32(z)) * 0.08);
-  if (cave > 0.55 && cave2 > 0.4 && y > -50 && y < height - 4) {
-    if (y <= SEA_LEVEL) { return WATER; }
-    return AIR;
+  // caves (toggle-controlled)
+  if (u.enable_caves > 0.5) {
+    let cave = fbm3(vec3<f32>(f32(x), f32(y), f32(z)) * 0.04);
+    let cave2 = noise3(vec3<f32>(f32(x), f32(y), f32(z)) * 0.08);
+    if (cave > 0.55 && cave2 > 0.4 && y > -50 && y < height - 4) {
+      if (y <= i32(u.sea_level)) { return WATER; }
+      return AIR;
+    }
   }
 
   // deep underground (below y=0): deepslate + ores
@@ -260,7 +272,8 @@ fn generate(x: i32, y: i32, z: i32) -> u32 {
   }
 
   // beaches near sea level
-  let is_beach = height <= SEA_LEVEL + 2 && height >= SEA_LEVEL - 3;
+  let sl = i32(u.sea_level);
+  let is_beach = height <= sl + 2 && height >= sl - 3;
   if (is_beach) {
     if (y >= height - 3) { return SAND; }
     if (y >= height - 5) { return SANDSTONE; }
@@ -280,13 +293,17 @@ fn generate(x: i32, y: i32, z: i32) -> u32 {
 }
 `;
 
+import type { ShaderParam } from "./params";
+
 /** Wraps user WGSL code in a compute shader with the boilerplate. */
-export function buildComputeShader(userCode: string): string {
+export function buildComputeShader(userCode: string, params: ShaderParam[] = []): string {
+  const paramFields = params.map((p) => `  ${p.name}: f32,`).join("\n");
+  const uniformsStruct = params.length > 0
+    ? `struct Uniforms {\n  chunk_x: i32,\n  chunk_z: i32,\n${paramFields}\n};`
+    : `struct Uniforms {\n  chunk_x: i32,\n  chunk_z: i32,\n};`;
+
   return `
-struct Uniforms {
-  chunk_x: i32,
-  chunk_z: i32,
-};
+${uniformsStruct}
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read_write> output: array<u32>;

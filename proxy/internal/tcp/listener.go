@@ -54,8 +54,14 @@ func (l *Listener) ListenAndServe(ctx context.Context) error {
 func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
-	// Read the full handshake packet to extract the server address
-	raw, serverAddr, err := readHandshake(conn)
+	// Extract client IP
+	clientIP := ""
+	if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+		clientIP = host
+	}
+
+	// Read the full handshake packet to extract the server address and next state
+	raw, serverAddr, nextState, err := readHandshake(conn)
 	if err != nil {
 		log.Printf("tcp: handshake read failed: %v", err)
 		return
@@ -63,9 +69,23 @@ func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 
 	// Extract subdomain from server address (e.g., "myroom.localhost" → "myroom")
 	subdomain := extractSubdomain(serverAddr, l.Domain)
-	log.Printf("tcp: client connecting to room %q (address: %s)", subdomain, serverAddr)
+	log.Printf("tcp: client %s connecting to room %q (address: %s)", clientIP, subdomain, serverAddr)
 
 	m := metrics.Get()
+
+	// If this is a login (nextState==2), try to read the Login Start packet for username
+	var loginRaw []byte
+	var username string
+	if nextState == 2 {
+		loginRaw, username, err = readLoginStart(conn)
+		if err != nil {
+			log.Printf("tcp: login start read failed (non-fatal): %v", err)
+			// loginRaw may still have partial data to replay
+		}
+		if username != "" {
+			log.Printf("tcp: player %q from %s joining room %q", username, clientIP, subdomain)
+		}
+	}
 
 	// Look up the browser session
 	session := l.Router.Lookup(subdomain)
@@ -91,10 +111,23 @@ func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	// Bridge the TCP connection and WebTransport stream
-	b := bridge.New(conn, stream)
-	m.BridgeStarted(subdomain)
-	log.Printf("tcp: bridge active for room %q", subdomain)
+	// Replay login start bytes if we captured them
+	if len(loginRaw) > 0 {
+		if _, err := stream.Write(loginRaw); err != nil {
+			log.Printf("tcp: replay login start failed: %v", err)
+			stream.Close()
+			m.BridgeFailed()
+			return
+		}
+	}
+
+	// Register client and get byte counters
+	clientID := m.BridgeStarted(subdomain, username, clientIP)
+	bytesIn, bytesOut := m.ClientBytesCounters(clientID)
+
+	// Bridge the TCP connection and WebTransport stream using external counters
+	b := bridge.NewWithCounters(conn, stream, bytesIn, bytesOut)
+	log.Printf("tcp: bridge active for room %q (player=%q, ip=%s)", subdomain, username, clientIP)
 
 	select {
 	case <-b.Done():
@@ -102,28 +135,26 @@ func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 		b.Close()
 	}
 
-	// Record byte counts from this bridge
-	m.AddBytesIn(b.Counter.In.Load())
-	m.AddBytesOut(b.Counter.Out.Load())
-	m.BridgeStopped(subdomain)
-	log.Printf("tcp: bridge closed for room %q", subdomain)
+	m.BridgeStopped(clientID)
+	log.Printf("tcp: bridge closed for room %q (player=%q)", subdomain, username)
 }
 
-// readHandshake reads a Minecraft handshake packet and returns the raw bytes and the server address field.
-func readHandshake(r io.Reader) (raw []byte, serverAddr string, err error) {
+// readHandshake reads a Minecraft handshake packet and returns the raw bytes,
+// the server address field, and the next state (1=status, 2=login).
+func readHandshake(r io.Reader) (raw []byte, serverAddr string, nextState int, err error) {
 	// Read packet length (varint)
 	packetLen, lenBytes, err := readVarInt(r)
 	if err != nil {
-		return nil, "", fmt.Errorf("read packet length: %w", err)
+		return nil, "", 0, fmt.Errorf("read packet length: %w", err)
 	}
 	if packetLen < 1 || packetLen > 1024 {
-		return nil, "", fmt.Errorf("invalid packet length: %d", packetLen)
+		return nil, "", 0, fmt.Errorf("invalid packet length: %d", packetLen)
 	}
 
 	// Read the full packet body
 	body := make([]byte, packetLen)
 	if _, err := io.ReadFull(r, body); err != nil {
-		return nil, "", fmt.Errorf("read packet body: %w", err)
+		return nil, "", 0, fmt.Errorf("read packet body: %w", err)
 	}
 
 	// Combine length prefix + body as the raw bytes to replay
@@ -133,30 +164,90 @@ func readHandshake(r io.Reader) (raw []byte, serverAddr string, err error) {
 	offset := 0
 	packetID, n := binary.Uvarint(body)
 	if n <= 0 || packetID != 0 {
-		return raw, "", fmt.Errorf("not a handshake packet (id=%d)", packetID)
+		return raw, "", 0, fmt.Errorf("not a handshake packet (id=%d)", packetID)
 	}
 	offset += n
 
 	// Skip protocol version (varint)
 	_, n = binary.Uvarint(body[offset:])
 	if n <= 0 {
-		return raw, "", fmt.Errorf("bad protocol version varint")
+		return raw, "", 0, fmt.Errorf("bad protocol version varint")
 	}
 	offset += n
 
 	// Read server address (varint-prefixed string)
 	addrLen, n := binary.Uvarint(body[offset:])
 	if n <= 0 {
-		return raw, "", fmt.Errorf("bad address length varint")
+		return raw, "", 0, fmt.Errorf("bad address length varint")
 	}
 	offset += n
 
 	if offset+int(addrLen) > len(body) {
-		return raw, "", fmt.Errorf("address length exceeds packet")
+		return raw, "", 0, fmt.Errorf("address length exceeds packet")
 	}
 	serverAddr = string(body[offset : offset+int(addrLen)])
+	offset += int(addrLen)
 
-	return raw, serverAddr, nil
+	// Read server port (unsigned short, 2 bytes)
+	if offset+2 > len(body) {
+		return raw, serverAddr, 0, fmt.Errorf("missing server port")
+	}
+	offset += 2
+
+	// Read next state (varint): 1=status, 2=login
+	ns, n := binary.Uvarint(body[offset:])
+	if n <= 0 {
+		return raw, serverAddr, 0, fmt.Errorf("bad next state varint")
+	}
+	nextState = int(ns)
+
+	return raw, serverAddr, nextState, nil
+}
+
+// readLoginStart reads the Login Start packet (ID 0x00 in login state) and
+// extracts the player username. Returns the raw packet bytes for replay.
+func readLoginStart(r io.Reader) (raw []byte, username string, err error) {
+	// Read packet length (varint)
+	packetLen, lenBytes, err := readVarInt(r)
+	if err != nil {
+		return nil, "", fmt.Errorf("read login packet length: %w", err)
+	}
+	if packetLen < 1 || packetLen > 1024 {
+		return nil, "", fmt.Errorf("invalid login packet length: %d", packetLen)
+	}
+
+	// Read the full packet body
+	body := make([]byte, packetLen)
+	if _, err := io.ReadFull(r, body); err != nil {
+		return nil, "", fmt.Errorf("read login packet body: %w", err)
+	}
+
+	raw = append(lenBytes, body...)
+
+	// Parse packet ID (should be 0x00 for Login Start)
+	packetID, n := binary.Uvarint(body)
+	if n <= 0 {
+		return raw, "", fmt.Errorf("bad login packet id varint")
+	}
+	if packetID != 0 {
+		// Not Login Start, just return the raw bytes for replay
+		return raw, "", nil
+	}
+	offset := n
+
+	// Read username (varint-prefixed string)
+	nameLen, n := binary.Uvarint(body[offset:])
+	if n <= 0 {
+		return raw, "", fmt.Errorf("bad username length varint")
+	}
+	offset += n
+
+	if offset+int(nameLen) > len(body) {
+		return raw, "", fmt.Errorf("username length exceeds packet")
+	}
+	username = string(body[offset : offset+int(nameLen)])
+
+	return raw, username, nil
 }
 
 // readVarInt reads a Minecraft-style varint from the reader.

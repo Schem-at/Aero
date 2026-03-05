@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { useServer, type ServerStatus } from "@/context/ServerContext";
 import { useStats } from "@/context/StatsContext";
-import { Users, Clock, Globe } from "lucide-react";
+import { Users, Clock } from "lucide-react";
 
 const statusConfig: Record<
   ServerStatus,
@@ -57,10 +57,6 @@ export function StatusBar() {
               {uptime}
             </span>
           )}
-          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Globe className="h-3 w-3" />
-            localhost:25565
-          </span>
         </>
       )}
       {errorMessage && (

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 
 	"github.com/quic-go/quic-go/http3"
@@ -15,6 +16,31 @@ import (
 	"github.com/user/minecraft-web/proxy/internal/metrics"
 	"github.com/user/minecraft-web/proxy/internal/router"
 )
+
+var adjectives = []string{
+	"brave", "calm", "dark", "eager", "fast",
+	"grand", "happy", "keen", "lucky", "neat",
+	"proud", "quick", "red", "sharp", "tall", "warm",
+}
+
+var nouns = []string{
+	"fox", "bear", "wolf", "hawk", "lynx",
+	"pine", "oak", "reef", "peak", "vale",
+	"star", "moon", "bolt", "gale", "dusk", "fern",
+}
+
+func generateName() string {
+	return adjectives[rand.Intn(len(adjectives))] + "-" + nouns[rand.Intn(len(nouns))]
+}
+
+func randomSuffix() string {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 3)
+	for i := range b {
+		b[i] = chars[rand.Intn(len(chars))]
+	}
+	return string(b)
+}
 
 // Server handles incoming WebTransport connections from browser hosts.
 type Server struct {
@@ -99,21 +125,38 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 		return
 	}
 
-	if reg.Room == "" {
-		reg.Room = "default"
+	preferred := reg.Room
+	if preferred == "" {
+		preferred = generateName()
 	}
 
-	log.Printf("wt: session registered for room %q", reg.Room)
+	// Try to register with the preferred name, then with suffixes
+	sess := &router.Session{WT: session}
+	assigned := preferred
+	if !s.Router.TryRegister(assigned, sess) {
+		registered := false
+		for i := 0; i < 5; i++ {
+			assigned = preferred + "-" + randomSuffix()
+			if s.Router.TryRegister(assigned, sess) {
+				registered = true
+				break
+			}
+		}
+		if !registered {
+			assigned = generateName() + "-" + randomSuffix()
+			s.Router.Register(assigned, sess)
+		}
+	}
 
-	s.Router.Register(reg.Room, &router.Session{WT: session})
-	metrics.Get().RoomRegistered(reg.Room)
+	log.Printf("wt: session registered for room %q (requested %q)", assigned, preferred)
+	metrics.Get().RoomRegistered(assigned)
 	defer func() {
-		s.Router.Remove(reg.Room)
-		metrics.Get().RoomRemoved(reg.Room)
+		s.Router.Remove(assigned)
+		metrics.Get().RoomRemoved(assigned)
 	}()
 
-	// Send confirmation back on control stream
-	json.NewEncoder(stream).Encode(map[string]string{"status": "ok", "room": reg.Room})
+	// Send confirmation back on control stream with the actually assigned name
+	json.NewEncoder(stream).Encode(map[string]string{"status": "ok", "room": assigned})
 
 	// Keep session alive until context cancels or session closes
 	select {
@@ -123,5 +166,5 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 
 	// Drain — read to EOF to detect clean close
 	io.ReadAll(stream)
-	log.Printf("wt: session %q disconnected", reg.Room)
+	log.Printf("wt: session %q disconnected", assigned)
 }

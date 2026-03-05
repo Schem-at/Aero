@@ -30,6 +30,7 @@ impl std::fmt::Display for ConnectionState {
 pub struct LoginData {
     pub username: String,
     pub player_uuid: Option<String>,
+    pub properties: Vec<(String, String, Option<String>)>,
     pub key_pair: Option<ServerKeyPair>,
     pub verify_token: Option<Vec<u8>>,
     pub shared_secret: Option<[u8; 16]>,
@@ -58,6 +59,8 @@ pub struct Connection {
     pub player_chunk_x: i32,
     pub player_chunk_z: i32,
     pub pending_chunk_center: Option<(i32, i32)>,
+    pub fly_speed: f32,
+    pub is_flying: bool,
     logger: Box<dyn Logger>,
     registry: PacketRegistry,
 }
@@ -81,6 +84,8 @@ impl Connection {
             player_chunk_x: 0,
             player_chunk_z: 0,
             pending_chunk_center: None,
+            fly_speed: 0.05,
+            is_flying: false,
             logger,
             registry: PacketRegistry::default_registry(),
         }
@@ -100,6 +105,8 @@ impl Connection {
         self.player_chunk_x = 0;
         self.player_chunk_z = 0;
         self.pending_chunk_center = None;
+        self.fly_speed = 0.05;
+        self.is_flying = false;
         self.stats.player_count = 0;
         self.stats.connected_at_ms = 0.0;
         self.log(LogLevel::Debug, LogCategory::System, "Connection state reset to Handshaking");
@@ -190,6 +197,8 @@ impl Connection {
                 player_chunk_x: &mut self.player_chunk_x,
                 player_chunk_z: &mut self.player_chunk_z,
                 pending_chunk_center: &mut self.pending_chunk_center,
+                fly_speed: &mut self.fly_speed,
+                is_flying: &mut self.is_flying,
             };
 
             let result = handler.handle(&payload, &mut ctx);
@@ -316,6 +325,14 @@ impl Connection {
         if let Some(ref mut login_data) = self.login_data {
             login_data.player_uuid = Some(uuid_str.to_string());
             login_data.username = name.to_string();
+            if let Some(props) = properties.as_array() {
+                login_data.properties = props.iter().map(|p| {
+                    let pname = p["name"].as_str().unwrap_or("").to_string();
+                    let pvalue = p["value"].as_str().unwrap_or("").to_string();
+                    let psig = p["signature"].as_str().map(|s| s.to_string());
+                    (pname, pvalue, psig)
+                }).collect();
+            }
         }
 
         let mut response = Vec::new();

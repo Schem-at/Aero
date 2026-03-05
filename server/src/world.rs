@@ -5,12 +5,28 @@ use crate::compression::compress_packet;
 use crate::protocol::types::{write_string, write_varint};
 use std::collections::HashMap;
 
-/// Build the init packets sent before chunks: Login Play, Game Event, Set Spawn, View Position, Chunk Batch Start.
-pub fn build_play_init(entity_id: i32, threshold: i32) -> Vec<u8> {
+/// Build the init packets sent before chunks.
+pub fn build_play_init(
+    entity_id: i32,
+    threshold: i32,
+    uuid: &str,
+    username: &str,
+    properties: &[(String, String, Option<String>)],
+    fly_speed: f32,
+) -> Vec<u8> {
     let mut result = Vec::new();
     result.extend_from_slice(&compress_packet(0x30, &build_login_play(entity_id), threshold));
     result.extend_from_slice(&compress_packet(0x26, &build_game_event(13, 0.0), threshold));
     result.extend_from_slice(&compress_packet(0x5F, &build_set_default_spawn(), threshold));
+    // Player Abilities (0x3E) — creative mode with fly enabled
+    result.extend_from_slice(&compress_packet(0x3E, &build_player_abilities(fly_speed, false), threshold));
+    // Player Info Update (0x44) — add player to tab list
+    result.extend_from_slice(&compress_packet(0x44, &build_player_info_update(uuid, username, properties), threshold));
+    // Commands (0x10) — command tree for tab completion
+    result.extend_from_slice(&compress_packet(0x10, &build_commands(), threshold));
+    // Set Time (0x6F) — noon, time progresses naturally
+    result.extend_from_slice(&compress_packet(0x6F, &build_set_time(0, 6000, true), threshold));
+    // View position + chunk batch start
     result.extend_from_slice(&compress_packet(0x5C, &build_update_view_position(), threshold));
     result.extend_from_slice(&compress_packet(0x0C, &[], threshold));
     result
@@ -525,6 +541,172 @@ fn build_chunk_batch_finished(count: i32) -> Vec<u8> {
     write_varint(count)
 }
 
+/// Build Player Info Update (0x44) payload — adds player to tab list.
+fn build_player_info_update(uuid: &str, username: &str, properties: &[(String, String, Option<String>)]) -> Vec<u8> {
+    let mut p = Vec::new();
+
+    // Actions bitmask: Add Player (0x01) | Update Game Mode (0x04) | Update Listed (0x08) | Update Latency (0x10)
+    p.push(0x1D_u8);
+
+    // Number of players
+    p.extend_from_slice(&write_varint(1));
+
+    // UUID (16 bytes)
+    let uuid_hex: String = uuid.chars().filter(|c| *c != '-').collect();
+    if uuid_hex.len() == 32 {
+        for i in 0..16 {
+            let byte = u8::from_str_radix(&uuid_hex[i*2..i*2+2], 16).unwrap_or(0);
+            p.push(byte);
+        }
+    } else {
+        p.extend_from_slice(&[0u8; 16]);
+    }
+
+    // Add Player: Name + Properties
+    p.extend_from_slice(&write_string(username));
+    p.extend_from_slice(&write_varint(properties.len() as i32));
+    for (name, value, signature) in properties {
+        p.extend_from_slice(&write_string(name));
+        p.extend_from_slice(&write_string(value));
+        if let Some(sig) = signature {
+            p.push(1); // is_signed = true
+            p.extend_from_slice(&write_string(sig));
+        } else {
+            p.push(0);
+        }
+    }
+
+    // Update Game Mode: Creative (1)
+    p.extend_from_slice(&write_varint(1));
+
+    // Update Listed: true
+    p.push(1);
+
+    // Update Latency: 0ms
+    p.extend_from_slice(&write_varint(0));
+
+    p
+}
+
+/// Build Commands (0x10) payload — Brigadier command tree for tab completion.
+pub fn build_commands() -> Vec<u8> {
+    let mut p = Vec::new();
+
+    // Node count: 11
+    p.extend_from_slice(&write_varint(11));
+
+    // Node 0: Root
+    p.push(0x00); // type=root
+    p.extend_from_slice(&write_varint(4)); // 4 children
+    p.extend_from_slice(&write_varint(1)); // speed
+    p.extend_from_slice(&write_varint(3)); // help
+    p.extend_from_slice(&write_varint(4)); // time
+    p.extend_from_slice(&write_varint(10)); // fly
+
+    // Node 1: Literal "speed"
+    p.push(0x01); // type=literal
+    p.extend_from_slice(&write_varint(1)); // 1 child
+    p.extend_from_slice(&write_varint(2));
+    p.extend_from_slice(&write_string("speed"));
+
+    // Node 2: Argument "value" float(0.0, 10.0), executable
+    p.push(0x04 | 0x02); // type=argument + executable
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("value"));
+    p.extend_from_slice(&write_varint(1)); // parser=float
+    p.push(0x03); // flags: has_min + has_max
+    p.extend_from_slice(&0.0f32.to_be_bytes());
+    p.extend_from_slice(&10.0f32.to_be_bytes());
+
+    // Node 3: Literal "help", executable
+    p.push(0x04 | 0x01); // type=literal + executable
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("help"));
+
+    // Node 4: Literal "time"
+    p.push(0x01); // type=literal
+    p.extend_from_slice(&write_varint(5)); // 5 children
+    p.extend_from_slice(&write_varint(5)); // day
+    p.extend_from_slice(&write_varint(6)); // night
+    p.extend_from_slice(&write_varint(7)); // noon
+    p.extend_from_slice(&write_varint(8)); // midnight
+    p.extend_from_slice(&write_varint(9)); // ticks
+    p.extend_from_slice(&write_string("time"));
+
+    // Node 5: Literal "day", executable
+    p.push(0x04 | 0x01);
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("day"));
+
+    // Node 6: Literal "night", executable
+    p.push(0x04 | 0x01);
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("night"));
+
+    // Node 7: Literal "noon", executable
+    p.push(0x04 | 0x01);
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("noon"));
+
+    // Node 8: Literal "midnight", executable
+    p.push(0x04 | 0x01);
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("midnight"));
+
+    // Node 9: Argument "ticks" integer(0, 24000), executable
+    p.push(0x04 | 0x02); // type=argument + executable
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("ticks"));
+    p.extend_from_slice(&write_varint(3)); // parser=integer
+    p.push(0x03); // flags: has_min + has_max
+    p.extend_from_slice(&0i32.to_be_bytes());
+    p.extend_from_slice(&24000i32.to_be_bytes());
+
+    // Node 10: Literal "fly", executable
+    p.push(0x04 | 0x01);
+    p.extend_from_slice(&write_varint(0));
+    p.extend_from_slice(&write_string("fly"));
+
+    // Root index
+    p.extend_from_slice(&write_varint(0));
+
+    p
+}
+
+/// Build Set Time (0x6F) payload.
+pub fn build_set_time(world_age: i64, time_of_day: i64, increasing: bool) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&world_age.to_be_bytes());
+    p.extend_from_slice(&time_of_day.to_be_bytes());
+    p.push(if increasing { 1 } else { 0 });
+    p
+}
+
+/// Build Player Abilities (0x3E) payload.
+pub fn build_player_abilities(fly_speed: f32, is_flying: bool) -> Vec<u8> {
+    let mut p = Vec::new();
+    // Flags: invulnerable (0x01) | allow_flying (0x04) | creative_mode (0x08) | maybe flying (0x02)
+    let mut flags: u8 = 0x01 | 0x04 | 0x08;
+    if is_flying {
+        flags |= 0x02;
+    }
+    p.push(flags as u8);
+    p.extend_from_slice(&fly_speed.to_be_bytes()); // Flying Speed
+    p.extend_from_slice(&0.1f32.to_be_bytes()); // FOV Modifier
+    p
+}
+
+/// Build a System Chat Message payload (NBT TAG_String + overlay bool).
+pub fn build_system_chat_payload(message: &str) -> Vec<u8> {
+    let bytes = message.as_bytes();
+    let mut payload = Vec::with_capacity(1 + 2 + bytes.len() + 1);
+    payload.push(0x08); // TAG_String type byte
+    payload.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+    payload.extend_from_slice(bytes);
+    payload.push(0); // overlay = false
+    payload
+}
+
 fn build_sync_player_position() -> Vec<u8> {
     let mut p = Vec::new();
 
@@ -602,7 +784,7 @@ mod tests {
 
     #[test]
     fn test_build_play_init_produces_bytes() {
-        let packets = build_play_init(1, 256);
+        let packets = build_play_init(1, 256, "00000000000000000000000000000001", "TestPlayer", &[], 0.05);
         assert!(packets.len() > 50, "Got {} bytes", packets.len());
     }
 

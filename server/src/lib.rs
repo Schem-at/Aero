@@ -102,7 +102,17 @@ mod wasm_exports {
         CONNECTION.with(|c| {
             let mut conn = c.borrow_mut();
             let threshold = conn.compression_threshold.unwrap_or(256);
-            let data = crate::world::build_play_init(1, threshold);
+            let (uuid, username, properties) = if let Some(ref ld) = conn.login_data {
+                (
+                    ld.player_uuid.as_deref().unwrap_or("00000000000000000000000000000000"),
+                    ld.username.as_str(),
+                    ld.properties.as_slice(),
+                )
+            } else {
+                ("00000000000000000000000000000000", "Player", &[][..])
+            };
+            let fly_speed = conn.fly_speed;
+            let data = crate::world::build_play_init(1, threshold, uuid, username, properties, fly_speed);
             conn.awaiting_chunks = true;
             if let Some(ref mut cipher) = conn.cipher {
                 let mut encrypted = data;

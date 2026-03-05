@@ -13,6 +13,8 @@ interface ServerContextValue {
   setStatus: (status: ServerStatus) => void;
   errorMessage: string | null;
   setError: (message: string) => void;
+  assignedRoom: string | null;
+  setAssignedRoom: (room: string | null) => void;
 }
 
 const ServerContext = createContext<ServerContextValue | null>(null);
@@ -20,10 +22,12 @@ const ServerContext = createContext<ServerContextValue | null>(null);
 export function ServerProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<ServerStatus>("stopped");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [assignedRoom, setAssignedRoom] = useState<string | null>(null);
 
   const handleSetStatus = useCallback((s: ServerStatus) => {
     setStatus(s);
     if (s !== "error") setErrorMessage(null);
+    if (s === "stopped") setAssignedRoom(null);
   }, []);
 
   const setError = useCallback((message: string) => {
@@ -38,6 +42,8 @@ export function ServerProvider({ children }: { children: ReactNode }) {
         setStatus: handleSetStatus,
         errorMessage,
         setError,
+        assignedRoom,
+        setAssignedRoom,
       }}
     >
       {children}

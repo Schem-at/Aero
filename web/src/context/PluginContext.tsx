@@ -90,25 +90,28 @@ export function PluginProvider({ children }: { children: ReactNode }) {
 
     const t0 = performance.now();
     const results: ChunkResult[] = [];
-    for (const { cx, cz } of chunks) {
-      const data: ChunkData = await gen.generate(cx, cz);
-      results.push({ cx, cz, blockStates: data.blockStates });
+    try {
+      for (const { cx, cz } of chunks) {
+        const data: ChunkData = await gen.generate(cx, cz);
+        results.push({ cx, cz, blockStates: data.blockStates });
+      }
+    } finally {
+      const elapsed = performance.now() - t0;
+      // Always decrement pending — even if generation threw partway through
+      setWorldGenStats((prev) => {
+        const generated = results.length;
+        const totalChunks = prev.chunksGenerated + generated;
+        const totalTime = prev.totalTimeMs + elapsed;
+        return {
+          chunksGenerated: totalChunks,
+          pendingChunks: Math.max(0, prev.pendingChunks - batchSize),
+          lastBatchSize: generated,
+          lastBatchTimeMs: elapsed,
+          avgChunkTimeMs: totalChunks > 0 ? totalTime / totalChunks : 0,
+          totalTimeMs: totalTime,
+        };
+      });
     }
-    const elapsed = performance.now() - t0;
-
-    // Update stats
-    setWorldGenStats((prev) => {
-      const totalChunks = prev.chunksGenerated + batchSize;
-      const totalTime = prev.totalTimeMs + elapsed;
-      return {
-        chunksGenerated: totalChunks,
-        pendingChunks: Math.max(0, prev.pendingChunks - batchSize),
-        lastBatchSize: batchSize,
-        lastBatchTimeMs: elapsed,
-        avgChunkTimeMs: totalTime / totalChunks,
-        totalTimeMs: totalTime,
-      };
-    });
 
     return results;
   }, []);

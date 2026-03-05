@@ -15,7 +15,16 @@ impl PacketHandler for AcknowledgeFinishConfigHandler {
         *ctx.state = ConnectionState::Play;
 
         let threshold = ctx.compression_threshold.unwrap_or(256);
-        let init_packets = build_play_init(1, threshold);
+        let (uuid, username, properties) = if let Some(ref ld) = ctx.login_data {
+            (
+                ld.player_uuid.as_deref().unwrap_or("00000000000000000000000000000000"),
+                ld.username.as_str(),
+                ld.properties.as_slice(),
+            )
+        } else {
+            ("00000000000000000000000000000000", "Player", &[][..])
+        };
+        let init_packets = build_play_init(1, threshold, uuid, username, properties, *ctx.fly_speed);
 
         *ctx.awaiting_chunks = true;
 

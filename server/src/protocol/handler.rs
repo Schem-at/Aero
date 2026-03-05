@@ -28,6 +28,8 @@ pub struct HandlerContext<'a> {
     pub player_chunk_x: &'a mut i32,
     pub player_chunk_z: &'a mut i32,
     pub pending_chunk_center: &'a mut Option<(i32, i32)>,
+    pub fly_speed: &'a mut f32,
+    pub is_flying: &'a mut bool,
 }
 
 impl<'a> HandlerContext<'a> {
@@ -158,10 +160,16 @@ impl PacketRegistry {
             Box::new(play_ignore::LogHandler { name: "Chat Session Update" }));
         reg.register(ConnectionState::Play, 0x15,
             Box::new(play_ignore::LogHandler { name: "Plugin Message (Play)" }));
-        reg.register(ConnectionState::Play, 0x27,
-            Box::new(play_ignore::LogHandler { name: "Block Dig" }));
+        reg.register(ConnectionState::Play, 0x28, // was incorrectly 0x27
+            Box::new(play_ignore::LogHandler { name: "Player Action" }));
         reg.register(ConnectionState::Play, 0x2B,
             Box::new(play_ignore::LogHandler { name: "Player Loaded" }));
+        reg.register(ConnectionState::Play, 0x34,
+            Box::new(play_ignore::LogHandler { name: "Set Held Item" }));
+
+        // Player Abilities (0x27) — flying toggle
+        reg.register(ConnectionState::Play, 0x27,
+            Box::new(player_abilities::PlayerAbilitiesHandler));
 
         // Player position packets — track chunk position for ongoing chunk loading
         reg.register(ConnectionState::Play, 0x1D,
@@ -172,10 +180,12 @@ impl PacketRegistry {
             Box::new(play_ignore::SilentHandler { name: "Player Look" }));
         reg.register(ConnectionState::Play, 0x20,
             Box::new(play_ignore::SilentHandler { name: "Player On Ground" }));
-        reg.register(ConnectionState::Play, 0x29,
+        reg.register(ConnectionState::Play, 0x29, // Player Command (sprint/sneak/elytra)
+            Box::new(play_ignore::SilentHandler { name: "Player Command" }));
+        reg.register(ConnectionState::Play, 0x2A, // was incorrectly 0x29
             Box::new(play_ignore::SilentHandler { name: "Player Input" }));
-        reg.register(ConnectionState::Play, 0x2A,
-            Box::new(play_ignore::SilentHandler { name: "Arm Animation" }));
+        reg.register(ConnectionState::Play, 0x3C, // was incorrectly 0x2A
+            Box::new(play_ignore::SilentHandler { name: "Swing Arm" }));
 
         // Chat packets
         reg.register(

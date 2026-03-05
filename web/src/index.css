@@ -18,3 +18,18 @@
   --radius-md: calc(var(--radius-lg) - 2px);
   --radius-sm: calc(var(--radius-lg) - 4px);
 }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* WGSL syntax highlighting tokens */
+.tok-keyword { color: #c084fc; }
+.tok-type { color: #22d3ee; }
+.tok-builtin { color: #60a5fa; }
+.tok-number { color: #fb923c; }
+.tok-decorator { color: #fbbf24; }
+.tok-comment { color: #71717a; }
+.tok-param { color: #34d399; }
+.tok-block { color: #a78bfa; }

@@ -11,15 +11,35 @@ export interface ServerConfig {
   max_players: number;
   version_name: string;
   favicon: string | null;
+  subdomain: string;
 }
 
 const STORAGE_KEY = "mc-web-server-config";
+
+const adjectives = [
+  "brave", "calm", "dark", "eager", "fast",
+  "grand", "happy", "keen", "lucky", "neat",
+  "proud", "quick", "red", "sharp", "tall", "warm",
+];
+
+const nouns = [
+  "fox", "bear", "wolf", "hawk", "lynx",
+  "pine", "oak", "reef", "peak", "vale",
+  "star", "moon", "bolt", "gale", "dusk", "fern",
+];
+
+export function generateSubdomain(): string {
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  return `${adj}-${noun}`;
+}
 
 const defaultConfig: ServerConfig = {
   motd: "A Minecraft server in your browser!",
   max_players: 20,
   version_name: "WASM 1.21",
   favicon: null,
+  subdomain: generateSubdomain(),
 };
 
 function loadConfig(): ServerConfig {

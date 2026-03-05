@@ -28,11 +28,23 @@ func New() *Router {
 	return &Router{sessions: make(map[string]*Session)}
 }
 
-// Register adds a session for the given subdomain.
+// Register adds a session for the given subdomain (overwrites if exists).
 func (r *Router) Register(subdomain string, session *Session) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions[subdomain] = session
+}
+
+// TryRegister registers only if the subdomain is not already taken.
+// Returns true if registered, false if the name is already in use.
+func (r *Router) TryRegister(subdomain string, session *Session) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.sessions[subdomain]; exists {
+		return false
+	}
+	r.sessions[subdomain] = session
+	return true
 }
 
 // Lookup returns the session for a subdomain, or nil if not found.

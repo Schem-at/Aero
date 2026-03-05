@@ -1,8 +1,8 @@
 import { useRef, useCallback } from "react";
-import { useServerConfig } from "@/context/ServerConfigContext";
+import { useServerConfig, generateSubdomain } from "@/context/ServerConfigContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ImagePlus, Trash2 } from "lucide-react";
+import { ImagePlus, Trash2, RefreshCw } from "lucide-react";
 
 /**
  * Resize an image file to 64x64 PNG and return a `data:image/png;base64,...` string.
@@ -115,6 +115,38 @@ export function SettingsPanel() {
           />
         </div>
       </div>
+
+      {/* Subdomain */}
+      <Field label="Subdomain" description="Minecraft clients connect to subdomain.domain:port">
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={config.subdomain}
+            onChange={(e) => {
+              const sanitized = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "");
+              updateConfig({ subdomain: sanitized });
+            }}
+            onBlur={(e) => {
+              let val = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "").replace(/^-+|-+$/g, "");
+              if (val.length < 2) val = generateSubdomain();
+              if (val.length > 20) val = val.slice(0, 20);
+              updateConfig({ subdomain: val });
+            }}
+            maxLength={20}
+            className="flex-1 px-3 py-1.5 text-sm bg-muted border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+            placeholder="brave-fox"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => updateConfig({ subdomain: generateSubdomain() })}
+            className="text-xs flex-shrink-0"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Randomize
+          </Button>
+        </div>
+      </Field>
 
       {/* Fields */}
       <Field label="MOTD" description="Message shown in the Minecraft server list">

@@ -20,3 +20,4 @@ pub mod play_ignore;
 pub mod chat_message;
 pub mod chat_command;
 pub mod player_position;
+pub mod player_abilities;

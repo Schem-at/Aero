@@ -26,6 +26,8 @@ let chunkQueue: Promise<void> = Promise.resolve();
 const sentChunks = new Set<string>();
 const VIEW_DISTANCE = 10;
 let isInitialSpawn = true;
+let lastChunkCenterX = 0;
+let lastChunkCenterZ = 0;
 
 function chunkKey(cx: number, cz: number): string {
   return `${cx},${cz}`;
@@ -34,13 +36,15 @@ function chunkKey(cx: number, cz: number): string {
 function requestChunks(): void {
   // Get the center position (from player movement or default 0,0)
   const centerStr = wasmModule.get_pending_chunk_center() as string;
-  let centerX = 0, centerZ = 0;
+  let centerX = lastChunkCenterX, centerZ = lastChunkCenterZ;
   if (centerStr) {
     const [cx, cz] = centerStr.split(",").map(Number);
     centerX = cx;
     centerZ = cz;
     wasmModule.clear_pending_chunk_center();
   }
+  lastChunkCenterX = centerX;
+  lastChunkCenterZ = centerZ;
 
   // Compute which chunks are needed (within view distance of center)
   const needed: { cx: number; cz: number }[] = [];
@@ -83,7 +87,7 @@ async function initWasm(): Promise<void> {
   wasmModule = mod;
 }
 
-async function handleStart(wtUrl: string, config: WorkerServerConfig): Promise<void> {
+async function handleStart(wtUrl: string, config: WorkerServerConfig, subdomain: string): Promise<void> {
   try {
     postMsg({ type: "log", level: "info", category: "system", message: "Starting WASM server module..." });
 
@@ -108,8 +112,8 @@ async function handleStart(wtUrl: string, config: WorkerServerConfig): Promise<v
     await transport.ready;
     postMsg({ type: "log", level: "info", category: "transport", message: "WebTransport connected" });
 
-    // Register room
-    await registerRoom("default");
+    // Register room with preferred subdomain
+    await registerRoom(subdomain || "default");
 
     // Start stats polling
     statsInterval = setInterval(pushStats, 500);
@@ -133,13 +137,23 @@ async function registerRoom(room: string): Promise<void> {
 
   const registration = JSON.stringify({ room });
   await controlWriter.write(new TextEncoder().encode(registration));
-  postMsg({ type: "log", level: "info", category: "transport", message: `Registered room: ${room}` });
+  postMsg({ type: "log", level: "info", category: "transport", message: `Requesting room: ${room}` });
 
   const controlReader = controlStream.readable.getReader();
   const { value } = await controlReader.read();
   if (value) {
-    const msg = new TextDecoder().decode(value);
-    postMsg({ type: "log", level: "debug", category: "transport", message: `Server confirmed: ${msg}` });
+    const responseText = new TextDecoder().decode(value);
+    postMsg({ type: "log", level: "debug", category: "transport", message: `Server confirmed: ${responseText}` });
+    try {
+      const response = JSON.parse(responseText);
+      const assignedRoom = response.room || room;
+      postMsg({ type: "room_assigned", room: assignedRoom });
+      postMsg({ type: "log", level: "info", category: "transport", message: `Registered room: ${assignedRoom}` });
+    } catch {
+      postMsg({ type: "room_assigned", room });
+    }
+  } else {
+    postMsg({ type: "room_assigned", room });
   }
   controlReader.releaseLock();
   controlWriter.releaseLock();
@@ -303,7 +317,7 @@ self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
   switch (msg.type) {
     case "start":
       (self as any).__CERT_HASH = msg.certHash;
-      await handleStart(msg.wtUrl, msg.config);
+      await handleStart(msg.wtUrl, msg.config, msg.subdomain);
       break;
     case "stop":
       handleStop();
@@ -323,6 +337,12 @@ self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case "chunk_batch_done":
       enqueueChunkBatchDone(msg.count);
+      break;
+    case "regenerate_chunks":
+      if (wasmModule && activeStreamWriter) {
+        sentChunks.clear();
+        requestChunks();
+      }
       break;
   }
 };

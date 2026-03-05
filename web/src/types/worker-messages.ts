@@ -3,12 +3,13 @@ import type { ConnectionStats, PacketLogEntry } from "./stats";
 
 // Main → Worker messages
 export type MainToWorkerMessage =
-  | { type: "start"; wtUrl: string; certHash: string; config: WorkerServerConfig }
+  | { type: "start"; wtUrl: string; certHash: string; config: WorkerServerConfig; subdomain: string }
   | { type: "stop" }
   | { type: "set_config"; config: WorkerServerConfig }
   | { type: "queue_chat"; message: string }
   | { type: "chunk_data"; cx: number; cz: number; blockStates: Uint16Array }
-  | { type: "chunk_batch_done"; count: number };
+  | { type: "chunk_batch_done"; count: number }
+  | { type: "regenerate_chunks" };
 
 export interface WorkerServerConfig {
   motd: string;
@@ -23,4 +24,5 @@ export type WorkerToMainMessage =
   | { type: "stats"; stats: ConnectionStats }
   | { type: "packet_log"; entries: PacketLogEntry[] }
   | { type: "status_change"; status: "running" | "stopped" | "error"; error?: string }
-  | { type: "chunks_needed"; chunks: { cx: number; cz: number }[] };
+  | { type: "chunks_needed"; chunks: { cx: number; cz: number }[] }
+  | { type: "room_assigned"; room: string };

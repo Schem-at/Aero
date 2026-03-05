@@ -10,6 +10,9 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  worker: {
+    format: "es",
+  },
   server: {
     port: 5555,
     proxy: {
@@ -18,6 +21,10 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/mojang/, ""),
         secure: true,
+      },
+      "/api/proxy": {
+        target: "http://localhost:9090",
+        changeOrigin: true,
       },
     },
   },

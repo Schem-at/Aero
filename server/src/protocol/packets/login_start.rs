@@ -41,6 +41,7 @@ impl PacketHandler for LoginStartHandler {
         *ctx.login_data = Some(LoginData {
             username,
             player_uuid: Some(player_uuid_hex),
+            properties: Vec::new(),
             key_pair: Some(key_pair),
             verify_token: Some(verify_token.to_vec()),
             shared_secret: None,

@@ -45,6 +45,19 @@ func New(tcp io.ReadWriteCloser, wt io.ReadWriteCloser) *Bridge {
 	return b
 }
 
+// NewWithCounters creates a Bridge that writes byte counts to external atomic counters
+// (owned by metrics) instead of internal ones.
+func NewWithCounters(tcp, wt io.ReadWriteCloser, inCounter, outCounter *atomic.Int64) *Bridge {
+	b := &Bridge{
+		tcp:  tcp,
+		wt:   wt,
+		done: make(chan struct{}),
+	}
+	go b.forward(&countingWriter{w: wt, counter: inCounter}, tcp)
+	go b.forward(&countingWriter{w: tcp, counter: outCounter}, wt)
+	return b
+}
+
 func (b *Bridge) forward(dst io.Writer, src io.Reader) {
 	io.Copy(dst, src)
 	b.Close()

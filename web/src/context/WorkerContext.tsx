@@ -17,12 +17,13 @@ interface WorkerContextValue {
   start: () => void;
   stop: () => void;
   queueChat: (message: string) => void;
+  regenerateChunks: () => void;
 }
 
 const WorkerContext = createContext<WorkerContextValue | null>(null);
 
 export function WorkerProvider({ children }: { children: ReactNode }) {
-  const { setStatus, setError } = useServer();
+  const { setStatus, setError, setAssignedRoom } = useServer();
   const { addLog, clearLogs } = useLogs();
   const { pushStats, pushPacketLog } = useStats();
   const { config } = useServerConfig();
@@ -55,21 +56,33 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
         setStatus("stopped");
       }
     };
+    bridge.onRoomAssigned = (room) => {
+      setAssignedRoom(room);
+    };
     bridge.onChunksNeeded = async (chunks) => {
-      const gen = generateChunksRef.current;
-      const results = await gen(chunks);
-      for (const { cx, cz, blockStates } of results) {
-        bridge.sendChunkData(cx, cz, blockStates);
+      try {
+        const gen = generateChunksRef.current;
+        const results = await gen(chunks);
+        for (const { cx, cz, blockStates } of results) {
+          bridge.sendChunkData(cx, cz, blockStates);
+        }
+        bridge.sendChunkBatchDone(results.length);
+      } catch (err) {
+        addLog("error", "system", `Chunk generation failed: ${err}`);
+        // Still send batch done so the client doesn't hang
+        bridge.sendChunkBatchDone(0);
       }
-      bridge.sendChunkBatchDone(results.length);
     };
 
     setStatus("initializing");
     addLog("info", "system", "Starting server worker...");
 
     const certHash = import.meta.env.VITE_CERT_HASH || "";
-    bridge.start("https://localhost:4433/connect", certHash, config);
-  }, [getBridge, addLog, pushStats, pushPacketLog, setStatus, setError, config]);
+    const wtPort = import.meta.env.VITE_WT_PORT || "4433";
+    const wtHost = import.meta.env.VITE_WT_HOST || window.location.hostname;
+    const wtUrl = `https://${wtHost}:${wtPort}/connect`;
+    bridge.start(wtUrl, certHash, config, config.subdomain);
+  }, [getBridge, addLog, pushStats, pushPacketLog, setStatus, setError, setAssignedRoom, config]);
 
   const stop = useCallback(() => {
     bridgeRef.current?.stop();
@@ -79,6 +92,10 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
 
   const queueChat = useCallback((message: string) => {
     bridgeRef.current?.queueChat(message);
+  }, []);
+
+  const regenerateChunks = useCallback(() => {
+    bridgeRef.current?.regenerateChunks();
   }, []);
 
   // Push config changes to worker
@@ -94,7 +111,7 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <WorkerContext.Provider value={{ start, stop, queueChat }}>
+    <WorkerContext.Provider value={{ start, stop, queueChat, regenerateChunks }}>
       {children}
     </WorkerContext.Provider>
   );

@@ -1,0 +1,17 @@
+server/target
+web/node_modules
+web/.bun
+web/dist
+web/public/wasm
+proxy/certs
+bin/
+.git
+.DS_Store
+*.log
+.env
+.env.local
+web/.env.local
+plan.md
+.history
+.vscode
+.claude

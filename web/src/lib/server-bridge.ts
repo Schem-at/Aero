@@ -11,6 +11,7 @@ export type StatsCallback = (stats: ConnectionStats) => void;
 export type PacketLogCallback = (entries: PacketLogEntry[]) => void;
 export type StatusChangeCallback = (status: "running" | "stopped" | "error", error?: string) => void;
 export type ChunksNeededCallback = (chunks: { cx: number; cz: number }[]) => void;
+export type RoomAssignedCallback = (room: string) => void;
 
 export class ServerBridge {
   private worker: Worker | null = null;
@@ -20,8 +21,9 @@ export class ServerBridge {
   onPacketLog: PacketLogCallback | null = null;
   onStatusChange: StatusChangeCallback | null = null;
   onChunksNeeded: ChunksNeededCallback | null = null;
+  onRoomAssigned: RoomAssignedCallback | null = null;
 
-  start(wtUrl: string, certHash: string, config: WorkerServerConfig): void {
+  start(wtUrl: string, certHash: string, config: WorkerServerConfig, subdomain: string): void {
     if (this.worker) {
       this.stop();
     }
@@ -49,6 +51,9 @@ export class ServerBridge {
         case "chunks_needed":
           this.onChunksNeeded?.(msg.chunks);
           break;
+        case "room_assigned":
+          this.onRoomAssigned?.(msg.room);
+          break;
       }
     };
 
@@ -57,7 +62,7 @@ export class ServerBridge {
       this.onStatusChange?.("error", err.message);
     };
 
-    this.send({ type: "start", wtUrl, certHash, config });
+    this.send({ type: "start", wtUrl, certHash, config, subdomain });
   }
 
   stop(): void {
@@ -90,6 +95,10 @@ export class ServerBridge {
 
   sendChunkBatchDone(count: number): void {
     this.send({ type: "chunk_batch_done", count });
+  }
+
+  regenerateChunks(): void {
+    this.send({ type: "regenerate_chunks" });
   }
 
   private send(msg: MainToWorkerMessage): void {
