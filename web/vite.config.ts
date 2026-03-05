@@ -12,6 +12,15 @@ export default defineConfig({
   },
   worker: {
     format: "es",
+    rollupOptions: {
+      output: {
+        entryFileNames: "assets/[name]-[hash].js",
+      },
+    },
+  },
+  build: {
+    minify: false,
+    sourcemap: true,
   },
   server: {
     port: 5555,

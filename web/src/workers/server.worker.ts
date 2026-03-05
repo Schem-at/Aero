@@ -148,8 +148,12 @@ async function handleStart(wtUrl: string, config: WorkerServerConfig, subdomain:
     acceptStreams();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack ?? "" : "";
     postMsg({ type: "status_change", status: "error", error: msg });
     postMsg({ type: "log", level: "error", category: "system", message: `Failed to initialize: ${msg}` });
+    if (stack) {
+      postMsg({ type: "log", level: "error", category: "system", message: `Stack: ${stack}` });
+    }
   }
 }
 
