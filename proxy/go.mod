@@ -12,6 +12,7 @@ require (
 require (
 	github.com/dunglas/httpsfv v1.1.0 // indirect
 	github.com/ebitengine/purego v0.9.1 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/tursodatabase/turso-go-platform-libs v0.5.0 // indirect
 	golang.org/x/net v0.43.0 // indirect

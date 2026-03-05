@@ -136,8 +136,8 @@ func (l *Listener) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	// Open a new WebTransport stream for this TCP client
-	stream, err := session.OpenStream(ctx)
+	// Open a new stream to the browser for this TCP client
+	stream, err := session.OpenStream()
 	if err != nil {
 		log.Printf("tcp: open WT stream failed: %v", err)
 		m.BridgeFailed()

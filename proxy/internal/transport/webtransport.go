@@ -72,14 +72,36 @@ func truncateMOTD(motd string) string {
 	return motd
 }
 
+// wtSession wraps a WebTransport session to implement router.Session.
+type wtSession struct {
+	session *webtransport.Session
+	done    chan struct{}
+}
+
+func (s *wtSession) OpenStream() (router.Stream, error) {
+	stream, err := s.session.OpenStreamSync(s.session.Context())
+	if err != nil {
+		return nil, err
+	}
+	return stream, nil
+}
+
+func (s *wtSession) Close() {
+	s.session.CloseWithError(0, "closed")
+}
+
+func (s *wtSession) Done() <-chan struct{} {
+	return s.done
+}
+
 // Server handles incoming WebTransport connections from browser hosts.
 type Server struct {
-	Addr       string
-	TLSCert    string
-	TLSKey     string
-	Router     *router.Router
-	wtServer   *webtransport.Server
-	activeRooms atomic.Int64
+	Addr        string
+	TLSCert     string
+	TLSKey      string
+	Router      *router.Router
+	ActiveRooms *atomic.Int64
+	wtServer    *webtransport.Server
 }
 
 // registration is the JSON sent by the browser on the control stream.
@@ -152,7 +174,7 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 	defer session.CloseWithError(0, "session ended")
 
 	// Enforce max rooms
-	if s.activeRooms.Load() >= maxRooms {
+	if s.ActiveRooms.Load() >= maxRooms {
 		log.Printf("wt: rejecting session (at room capacity %d)", maxRooms)
 		return
 	}
@@ -182,7 +204,11 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 	reg.MOTD = truncateMOTD(reg.MOTD)
 
 	// Try to register with the preferred name, then with suffixes (TryRegister only)
-	sess := &router.Session{WT: session}
+	sess := &wtSession{session: session, done: make(chan struct{})}
+	go func() {
+		<-session.Context().Done()
+		close(sess.done)
+	}()
 	assigned := preferred
 	if !s.Router.TryRegister(assigned, sess) {
 		registered := false
@@ -211,8 +237,8 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 		}
 	}
 
-	s.activeRooms.Add(1)
-	log.Printf("wt: session registered for room %q (requested %q) [%d active]", assigned, preferred, s.activeRooms.Load())
+	s.ActiveRooms.Add(1)
+	log.Printf("wt: session registered for room %q (requested %q) [%d active]", assigned, preferred, s.ActiveRooms.Load())
 	metrics.Get().RoomRegistered(assigned)
 	if reg.Public {
 		metrics.Get().SetRoomPublic(assigned, true)
@@ -226,7 +252,7 @@ func (s *Server) handleSession(ctx context.Context, session *webtransport.Sessio
 	defer func() {
 		s.Router.Remove(assigned)
 		metrics.Get().RoomRemoved(assigned)
-		s.activeRooms.Add(-1)
+		s.ActiveRooms.Add(-1)
 	}()
 
 	// Send confirmation back on control stream with the actually assigned name

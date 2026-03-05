@@ -16,9 +16,8 @@ export function ServerControls() {
   const isBusy = status === "initializing";
 
   const displayRoom = isRunning && assignedRoom ? assignedRoom : config.subdomain;
-  const domain = import.meta.env.VITE_DOMAIN || window.location.hostname;
-  const tcpPort = import.meta.env.VITE_TCP_PORT || "25580";
-  const address = `${displayRoom}.${domain}:${tcpPort}`;
+  const domain = window.location.hostname;
+  const address = `${displayRoom}.${domain}`;
 
   const copyAddress = useCallback(() => {
     navigator.clipboard.writeText(address);

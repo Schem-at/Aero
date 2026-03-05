@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/user/minecraft-web/proxy/internal/auth"
@@ -100,14 +101,19 @@ func main() {
 
 	// Shared router for subdomain → session mapping
 	r := router.New()
+	activeRooms := &atomic.Int64{}
 
 	// WebTransport server (required — fatal if it fails)
 	wts := &transport.Server{
-		Addr:    fmt.Sprintf(":%d", *wtPort),
-		TLSCert: *cert,
-		TLSKey:  *key,
-		Router:  r,
+		Addr:        fmt.Sprintf(":%d", *wtPort),
+		TLSCert:     *cert,
+		TLSKey:      *key,
+		Router:      r,
+		ActiveRooms: activeRooms,
 	}
+
+	// WebSocket handler (fallback for browsers without WebTransport, e.g. iOS Safari)
+	wsHandler := transport.NewWSHandler(r, activeRooms)
 
 	// TCP listener for Minecraft clients (non-fatal — log and continue)
 	tcpListener := &tcp.Listener{
@@ -154,6 +160,9 @@ func main() {
 		})
 	})
 
+	// WebSocket endpoint for browsers without WebTransport
+	apiMux.Handle("/ws", wsHandler)
+
 	apiMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintln(w, "Aero Proxy — API server")
@@ -178,7 +187,7 @@ func main() {
 	if *webDir != "" {
 		webServer = &http.Server{
 			Addr:         fmt.Sprintf(":%d", *webPort),
-			Handler:      webHandler(*webDir, database, jwtSecret, *domain, *port, certHashB64, *wtPort),
+			Handler:      webHandler(*webDir, database, jwtSecret, *domain, *port, certHashB64, *wtPort, wsHandler),
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 30 * time.Second,
 			IdleTimeout:  120 * time.Second,
@@ -232,7 +241,7 @@ func main() {
 
 // webHandler builds an HTTP handler that serves static files with SPA fallback,
 // proxies /api/mojang/ to Mojang's session server, and adds gzip-friendly headers.
-func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tcpPort int, certHash string, wtPort int) http.Handler {
+func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tcpPort int, certHash string, wtPort int, wsHandler http.Handler) http.Handler {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		log.Fatalf("web: invalid directory %q: %v", dir, err)
@@ -286,6 +295,9 @@ func webHandler(dir string, database *db.DB, jwtSecret string, domain string, tc
 			"tcpPort":  tcpPort,
 		})
 	})
+
+	// WebSocket endpoint for browsers without WebTransport
+	mux.Handle("/ws", wsHandler)
 
 	// Static files with SPA fallback
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

@@ -6,7 +6,7 @@ const BOOT_LOGS = [
   { prefix: "ok", text: "wasm runtime initialized (aero_server.wasm)", color: "text-emerald-500" },
   { prefix: "ok", text: "webtransport session pool ready", color: "text-emerald-500" },
   { prefix: "load", text: "gpu compute pipeline created (wgsl shaders)", color: "text-amber-500" },
-  { prefix: "ok", text: "tcp proxy bridge online :25580", color: "text-emerald-500" },
+  { prefix: "ok", text: "tcp proxy bridge online :25565", color: "text-emerald-500" },
   { prefix: "info", text: "protocol 774 (minecraft 1.21.11)", color: "text-cyan-500" },
   { prefix: "ok", text: "all systems nominal", color: "text-emerald-500" },
 ];

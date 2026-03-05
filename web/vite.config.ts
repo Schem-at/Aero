@@ -22,6 +22,10 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api\/mojang/, ""),
         secure: true,
       },
+      "/ws": {
+        target: "http://localhost:9090",
+        ws: true,
+      },
       "/api/proxy": {
         target: "http://localhost:9090",
         changeOrigin: true,

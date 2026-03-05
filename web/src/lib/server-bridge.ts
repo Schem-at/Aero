@@ -23,7 +23,7 @@ export class ServerBridge {
   onChunksNeeded: ChunksNeededCallback | null = null;
   onRoomAssigned: RoomAssignedCallback | null = null;
 
-  start(wtUrl: string, certHash: string, config: WorkerServerConfig, subdomain: string): void {
+  start(wtUrl: string, wsUrl: string, certHash: string, config: WorkerServerConfig, subdomain: string): void {
     if (this.worker) {
       this.stop();
     }
@@ -62,7 +62,7 @@ export class ServerBridge {
       this.onStatusChange?.("error", err.message);
     };
 
-    this.send({ type: "start", wtUrl, certHash, config, subdomain });
+    this.send({ type: "start", wtUrl, wsUrl, certHash, config, subdomain });
   }
 
   stop(): void {

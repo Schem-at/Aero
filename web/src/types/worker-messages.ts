@@ -3,7 +3,7 @@ import type { ConnectionStats, PacketLogEntry } from "./stats";
 
 // Main → Worker messages
 export type MainToWorkerMessage =
-  | { type: "start"; wtUrl: string; certHash: string; config: WorkerServerConfig; subdomain: string }
+  | { type: "start"; wtUrl: string; wsUrl: string; certHash: string; config: WorkerServerConfig; subdomain: string }
   | { type: "stop" }
   | { type: "set_config"; config: WorkerServerConfig }
   | { type: "queue_chat"; message: string }

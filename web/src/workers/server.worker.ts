@@ -1,4 +1,4 @@
-/// Server Worker — runs WASM + WebTransport off the main thread.
+/// Server Worker — runs WASM + WebTransport/WebSocket off the main thread.
 
 import type { MainToWorkerMessage, WorkerToMainMessage, WorkerServerConfig } from "@/types/worker-messages";
 
@@ -14,10 +14,205 @@ function postMsg(msg: WorkerToMainMessage) {
   self.postMessage(msg);
 }
 
+// ---------------------------------------------------------------------------
+// Transport abstraction — works over WebTransport or WebSocket
+// ---------------------------------------------------------------------------
+
+interface StreamHandle {
+  read(): Promise<Uint8Array | null>;
+  write(data: Uint8Array): Promise<void>;
+  close(): void;
+}
+
+interface TransportHandle {
+  createControlStream(): Promise<StreamHandle>;
+  acceptStream(): Promise<StreamHandle | null>;
+  close(): void;
+}
+
+// --- WebTransport implementation ---
+
+class WTTransport implements TransportHandle {
+  private streamReader: ReadableStreamDefaultReader<WebTransportBidirectionalStream>;
+  constructor(private wt: WebTransport) {
+    this.streamReader = wt.incomingBidirectionalStreams.getReader();
+  }
+  async createControlStream(): Promise<StreamHandle> {
+    const bidi = await this.wt.createBidirectionalStream();
+    return new WTStream(bidi);
+  }
+  async acceptStream(): Promise<StreamHandle | null> {
+    const { value, done } = await this.streamReader.read();
+    if (done) return null;
+    return new WTStream(value);
+  }
+  close(): void {
+    this.streamReader.releaseLock();
+    this.wt.close();
+  }
+}
+
+class WTStream implements StreamHandle {
+  private reader: ReadableStreamDefaultReader<Uint8Array>;
+  private writer: WritableStreamDefaultWriter<Uint8Array>;
+  constructor(bidi: WebTransportBidirectionalStream) {
+    this.reader = bidi.readable.getReader();
+    this.writer = bidi.writable.getWriter();
+  }
+  async read(): Promise<Uint8Array | null> {
+    const { value, done } = await this.reader.read();
+    if (done) return null;
+    return value ?? null;
+  }
+  async write(data: Uint8Array): Promise<void> {
+    await this.writer.write(data);
+  }
+  close(): void {
+    this.reader.releaseLock();
+    this.writer.releaseLock();
+  }
+}
+
+// --- WebSocket multiplexing implementation ---
+// Protocol: [1 byte type][4 bytes stream_id BE][payload...]
+// Types: 0x00=DATA, 0x01=STREAM_OPEN, 0x02=STREAM_CLOSE
+
+const WS_DATA = 0x00;
+const WS_STREAM_OPEN = 0x01;
+const WS_STREAM_CLOSE = 0x02;
+
+class WSTransport implements TransportHandle {
+  private ws: WebSocket;
+  private streams = new Map<number, WSStream>();
+  private acceptQueue: ((stream: WSStream | null) => void)[] = [];
+  private controlStream: WSStream;
+  private closed = false;
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.controlStream = new WSStream(0, this);
+    this.streams.set(0, this.controlStream);
+
+    ws.onmessage = (e: MessageEvent) => {
+      const data = new Uint8Array(e.data as ArrayBuffer);
+      if (data.length < 5) return;
+
+      const type = data[0];
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const streamId = view.getUint32(1, false);
+      const payload = data.slice(5);
+
+      switch (type) {
+        case WS_DATA:
+          this.streams.get(streamId)?.pushData(payload);
+          break;
+        case WS_STREAM_OPEN: {
+          const stream = new WSStream(streamId, this);
+          this.streams.set(streamId, stream);
+          const resolver = this.acceptQueue.shift();
+          if (resolver) resolver(stream);
+          break;
+        }
+        case WS_STREAM_CLOSE: {
+          const stream = this.streams.get(streamId);
+          if (stream) {
+            stream.closeRemote();
+            this.streams.delete(streamId);
+          }
+          break;
+        }
+      }
+    };
+
+    ws.onclose = () => {
+      this.closed = true;
+      for (const resolver of this.acceptQueue) resolver(null);
+      this.acceptQueue = [];
+      for (const stream of this.streams.values()) stream.closeRemote();
+    };
+  }
+
+  async createControlStream(): Promise<StreamHandle> {
+    return this.controlStream;
+  }
+
+  async acceptStream(): Promise<StreamHandle | null> {
+    if (this.closed) return null;
+    return new Promise((resolve) => {
+      this.acceptQueue.push(resolve);
+    });
+  }
+
+  sendRaw(data: Uint8Array): void {
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(data);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    this.ws.close();
+  }
+}
+
+class WSStream implements StreamHandle {
+  private buffer: Uint8Array[] = [];
+  private waiters: ((data: Uint8Array | null) => void)[] = [];
+  private closed = false;
+
+  constructor(private id: number, private transport: WSTransport) {}
+
+  pushData(data: Uint8Array): void {
+    if (this.closed) return;
+    const copy = new Uint8Array(data);
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter(copy);
+    } else {
+      this.buffer.push(copy);
+    }
+  }
+
+  closeRemote(): void {
+    this.closed = true;
+    for (const waiter of this.waiters) waiter(null);
+    this.waiters = [];
+  }
+
+  async read(): Promise<Uint8Array | null> {
+    if (this.buffer.length > 0) return this.buffer.shift()!;
+    if (this.closed) return null;
+    return new Promise((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+
+  async write(data: Uint8Array): Promise<void> {
+    const msg = new Uint8Array(5 + data.length);
+    msg[0] = WS_DATA;
+    new DataView(msg.buffer).setUint32(1, this.id, false);
+    msg.set(data, 5);
+    this.transport.sendRaw(msg);
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    const header = new Uint8Array(5);
+    header[0] = WS_STREAM_CLOSE;
+    new DataView(header.buffer).setUint32(1, this.id, false);
+    this.transport.sendRaw(header);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Worker state
+// ---------------------------------------------------------------------------
+
 let wasmModule: any = null;
-let transport: WebTransport | null = null;
-let controlWriter: WritableStreamDefaultWriter<Uint8Array> | null = null;
-let activeStreamWriter: WritableStreamDefaultWriter<Uint8Array> | null = null;
+let activeTransport: TransportHandle | null = null;
+let controlStream: StreamHandle | null = null;
+let activeStream: StreamHandle | null = null;
 let statsInterval: ReturnType<typeof setInterval> | null = null;
 
 // Whitelist state (updated via set_config messages)
@@ -45,13 +240,11 @@ function chunkKey(cx: number, cz: number): string {
 
 function requestChunks(): void {
   // If a batch is already in flight, defer this request until it completes.
-  // This prevents nested Chunk Batch Start packets which cause invisible chunks.
   if (batchInFlight) {
     pendingChunkRequest = true;
     return;
   }
 
-  // Get the center position (from player movement or default 0,0)
   const centerStr = wasmModule.get_pending_chunk_center() as string;
   let centerX = lastChunkCenterX, centerZ = lastChunkCenterZ;
   if (centerStr) {
@@ -63,7 +256,6 @@ function requestChunks(): void {
   lastChunkCenterX = centerX;
   lastChunkCenterZ = centerZ;
 
-  // Compute which chunks are needed (within view distance of center)
   const needed: { cx: number; cz: number }[] = [];
   const nowVisible = new Set<string>();
 
@@ -80,7 +272,6 @@ function requestChunks(): void {
     }
   }
 
-  // Prune chunks that are far away from the sentChunks set
   for (const key of sentChunks) {
     if (!nowVisible.has(key)) {
       sentChunks.delete(key);
@@ -93,7 +284,6 @@ function requestChunks(): void {
     enqueueChunkBatchStart();
     postMsg({ type: "chunks_needed", chunks: needed });
   } else {
-    // No new chunks needed — send Batch Start + Batch Finished together
     enqueueChunkBatchStart();
     enqueueChunkBatchDone(0);
   }
@@ -101,13 +291,43 @@ function requestChunks(): void {
 
 async function initWasm(): Promise<void> {
   if (wasmModule) return;
-  // Dynamic import for the WASM module
   const mod = await import("../../public/wasm/aero_server");
   await mod.default();
   wasmModule = mod;
 }
 
-async function handleStart(wtUrl: string, config: WorkerServerConfig, subdomain: string): Promise<void> {
+// ---------------------------------------------------------------------------
+// Transport connection helpers
+// ---------------------------------------------------------------------------
+
+async function connectWebTransport(wtUrl: string, certHash: string): Promise<TransportHandle> {
+  const hashBytes = Uint8Array.from(atob(certHash), (c: string) => c.charCodeAt(0));
+  const wt = new WebTransport(wtUrl, {
+    serverCertificateHashes: [
+      { algorithm: "sha-256", value: hashBytes.buffer },
+    ],
+  });
+  await wt.ready;
+  postMsg({ type: "log", level: "info", category: "transport", message: "WebTransport connected" });
+  return new WTTransport(wt);
+}
+
+async function connectWebSocket(wsUrl: string): Promise<TransportHandle> {
+  const ws = new WebSocket(wsUrl);
+  ws.binaryType = "arraybuffer";
+  await new Promise<void>((resolve, reject) => {
+    ws.onopen = () => resolve();
+    ws.onerror = () => reject(new Error("WebSocket connection failed"));
+  });
+  postMsg({ type: "log", level: "info", category: "transport", message: "WebSocket connected" });
+  return new WSTransport(ws);
+}
+
+// ---------------------------------------------------------------------------
+// Main session logic
+// ---------------------------------------------------------------------------
+
+async function handleStart(wtUrl: string, wsUrl: string, config: WorkerServerConfig, subdomain: string): Promise<void> {
   try {
     postMsg({ type: "log", level: "info", category: "system", message: "Starting WASM server module..." });
 
@@ -117,25 +337,23 @@ async function handleStart(wtUrl: string, config: WorkerServerConfig, subdomain:
     whitelist = new Set((config.whitelist ?? []).map((n: string) => n.toLowerCase()));
     viewDistance = config.render_distance ?? 10;
 
-    postMsg({ type: "log", level: "info", category: "system", message: "WASM initialized, connecting WebTransport..." });
+    postMsg({ type: "log", level: "info", category: "system", message: "WASM initialized, connecting transport..." });
 
-    // Connect WebTransport
+    // Try WebTransport first, fall back to WebSocket
     const certHash = (self as any).__CERT_HASH;
-    if (!certHash) {
-      throw new Error("Certificate hash not provided — pass it in start message or env");
+    if (typeof WebTransport !== "undefined" && certHash) {
+      try {
+        activeTransport = await connectWebTransport(wtUrl, certHash);
+      } catch (err) {
+        postMsg({ type: "log", level: "warn", category: "transport", message: `WebTransport failed, falling back to WebSocket: ${err}` });
+        activeTransport = await connectWebSocket(wsUrl);
+      }
+    } else {
+      postMsg({ type: "log", level: "info", category: "transport", message: "WebTransport not available, using WebSocket fallback" });
+      activeTransport = await connectWebSocket(wsUrl);
     }
 
-    const hashBytes = Uint8Array.from(atob(certHash), (c: string) => c.charCodeAt(0));
-    transport = new WebTransport(wtUrl, {
-      serverCertificateHashes: [
-        { algorithm: "sha-256", value: hashBytes.buffer },
-      ],
-    });
-
-    await transport.ready;
-    postMsg({ type: "log", level: "info", category: "transport", message: "WebTransport connected" });
-
-    // Register room with preferred subdomain, MOTD, and favicon
+    // Register room
     await registerRoom(subdomain || "default", false, config.motd, config.favicon ?? undefined);
 
     // Start stats polling
@@ -158,19 +376,17 @@ async function handleStart(wtUrl: string, config: WorkerServerConfig, subdomain:
 }
 
 async function registerRoom(room: string, isPublic: boolean = false, motd?: string, favicon?: string): Promise<void> {
-  if (!transport) return;
-  const controlStream = await transport.createBidirectionalStream();
-  const writer = controlStream.writable.getWriter();
+  if (!activeTransport) return;
+  const stream = await activeTransport.createControlStream();
 
   const reg: Record<string, unknown> = { room };
   if (isPublic) reg.public = true;
   if (motd) reg.motd = motd;
   if (favicon) reg.favicon = favicon;
-  await writer.write(new TextEncoder().encode(JSON.stringify(reg)));
+  await stream.write(new TextEncoder().encode(JSON.stringify(reg)));
   postMsg({ type: "log", level: "info", category: "transport", message: `Requesting room: ${room}` });
 
-  const controlReader = controlStream.readable.getReader();
-  const { value } = await controlReader.read();
+  const value = await stream.read();
   if (value) {
     const responseText = new TextDecoder().decode(value);
     postMsg({ type: "log", level: "debug", category: "transport", message: `Server confirmed: ${responseText}` });
@@ -185,34 +401,27 @@ async function registerRoom(room: string, isPublic: boolean = false, motd?: stri
   } else {
     postMsg({ type: "room_assigned", room });
   }
-  controlReader.releaseLock();
 
-  // Keep control writer for sending updates (public toggle, motd changes)
-  controlWriter = writer;
+  // Keep control stream for sending updates (public toggle, motd changes)
+  controlStream = stream;
 }
 
 async function acceptStreams(): Promise<void> {
-  if (!transport) return;
-  const reader = transport.incomingBidirectionalStreams.getReader();
+  if (!activeTransport) return;
   try {
     while (true) {
-      const { value: stream, done } = await reader.read();
-      if (done) break;
+      const stream = await activeTransport.acceptStream();
+      if (!stream) break;
       handleStream(stream);
     }
   } catch (err) {
-    if (transport) {
+    if (activeTransport) {
       postMsg({ type: "log", level: "warn", category: "transport", message: `Stream accept ended: ${err}` });
     }
-  } finally {
-    reader.releaseLock();
   }
 }
 
-async function handleStream(stream: WebTransportBidirectionalStream): Promise<void> {
-  const streamReader = stream.readable.getReader();
-  const streamWriter = stream.writable.getWriter();
-
+async function handleStream(stream: StreamHandle): Promise<void> {
   postMsg({ type: "log", level: "info", category: "transport", message: "New client stream accepted" });
 
   // Reset WASM state for new connection (no mutex needed — worker is single-threaded)
@@ -222,11 +431,12 @@ async function handleStream(stream: WebTransportBidirectionalStream): Promise<vo
   isInitialSpawn = true;
   batchInFlight = false;
   pendingChunkRequest = false;
+  activeStream = stream;
 
   try {
     while (true) {
-      const { value, done } = await streamReader.read();
-      if (done || !value) break;
+      const value = await stream.read();
+      if (!value) break;
 
       // Process packet through WASM
       const response = new Uint8Array(wasmModule.handle_packet(value));
@@ -240,14 +450,13 @@ async function handleStream(stream: WebTransportBidirectionalStream): Promise<vo
           message: `Authenticating ${username} via Mojang (hash: ${server_hash.substring(0, 8)}...)`,
         });
 
-        // Whitelist check — reject before completing auth
+        // Whitelist check
         if (whitelistEnabled && !whitelist.has(username.toLowerCase())) {
           postMsg({ type: "log", level: "warn", category: "transport", message: `${username} not on whitelist — disconnecting` });
-          // Build a disconnect packet via WASM
           const reason = JSON.stringify({ text: "You are not whitelisted on this server." });
           const disconnectBytes = new Uint8Array(wasmModule.build_disconnect(reason));
           if (disconnectBytes.length > 0) {
-            await streamWriter.write(disconnectBytes);
+            await stream.write(disconnectBytes);
           }
           break;
         }
@@ -261,38 +470,36 @@ async function handleStream(stream: WebTransportBidirectionalStream): Promise<vo
 
           if (loginBytes.length > 0) {
             postMsg({ type: "log", level: "info", category: "transport", message: `Sending Login Success (${loginBytes.length} bytes)` });
-            await streamWriter.write(loginBytes);
+            await stream.write(loginBytes);
           }
         } catch (err) {
           postMsg({ type: "log", level: "error", category: "transport", message: `Mojang auth failed: ${err}` });
         }
       } else if (response.length > 0) {
-        await streamWriter.write(response);
+        await stream.write(response);
       }
 
-      // Check if WASM is awaiting chunks (initial or player moved to new chunk)
+      // Check if WASM is awaiting chunks
       if (wasmModule.get_awaiting_chunks()) {
         wasmModule.clear_awaiting_chunks();
-        activeStreamWriter = streamWriter;
         requestChunks();
       }
     }
   } catch (err) {
     postMsg({ type: "log", level: "debug", category: "transport", message: `Stream ended: ${err}` });
   } finally {
-    streamReader.releaseLock();
-    streamWriter.releaseLock();
-    activeStreamWriter = null;
+    stream.close();
+    activeStream = null;
   }
 }
 
 function enqueueChunkBatchStart(): void {
   chunkQueue = chunkQueue.then(async () => {
-    if (!wasmModule || !activeStreamWriter) return;
+    if (!wasmModule || !activeStream) return;
     const startBytes = new Uint8Array(wasmModule.chunk_batch_start());
     if (startBytes.length > 0) {
       try {
-        await activeStreamWriter.write(startBytes);
+        await activeStream.write(startBytes);
       } catch (err) {
         postMsg({ type: "log", level: "error", category: "transport", message: `Failed to send batch start: ${err}` });
       }
@@ -302,11 +509,11 @@ function enqueueChunkBatchStart(): void {
 
 function enqueueChunkData(cx: number, cz: number, blockStates: Uint16Array): void {
   chunkQueue = chunkQueue.then(async () => {
-    if (!wasmModule || !activeStreamWriter) return;
+    if (!wasmModule || !activeStream) return;
     const chunkBytes = new Uint8Array(wasmModule.build_chunk(cx, cz, blockStates));
     if (chunkBytes.length > 0) {
       try {
-        await activeStreamWriter.write(chunkBytes);
+        await activeStream.write(chunkBytes);
       } catch (err) {
         postMsg({ type: "log", level: "error", category: "transport", message: `Failed to send chunk: ${err}` });
       }
@@ -316,9 +523,7 @@ function enqueueChunkData(cx: number, cz: number, blockStates: Uint16Array): voi
 
 function enqueueChunkBatchDone(count: number): void {
   chunkQueue = chunkQueue.then(async () => {
-    if (!wasmModule || !activeStreamWriter) return;
-    // Initial spawn: play_finish (includes Sync Player Position teleport)
-    // Ongoing: chunk_batch_end (just Chunk Batch Finished, no teleport)
+    if (!wasmModule || !activeStream) return;
     let finishBytes: Uint8Array;
     if (isInitialSpawn) {
       finishBytes = new Uint8Array(wasmModule.play_finish(count));
@@ -328,14 +533,13 @@ function enqueueChunkBatchDone(count: number): void {
     }
     if (finishBytes.length > 0) {
       try {
-        await activeStreamWriter.write(finishBytes);
+        await activeStream.write(finishBytes);
       } catch (err) {
         postMsg({ type: "log", level: "error", category: "transport", message: `Failed to send finish: ${err}` });
       }
     }
     postMsg({ type: "log", level: "info", category: "protocol", message: `Sent ${count} chunks + batch end to client` });
 
-    // Batch complete — check if another chunk request came in while we were busy
     batchInFlight = false;
     if (pendingChunkRequest) {
       pendingChunkRequest = false;
@@ -366,11 +570,11 @@ function handleStop(): void {
     clearInterval(statsInterval);
     statsInterval = null;
   }
-  activeStreamWriter = null;
-  controlWriter = null;
-  if (transport) {
-    transport.close();
-    transport = null;
+  activeStream = null;
+  controlStream = null;
+  if (activeTransport) {
+    activeTransport.close();
+    activeTransport = null;
   }
   if (wasmModule) {
     wasmModule.reset_state();
@@ -385,7 +589,7 @@ self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
   switch (msg.type) {
     case "start":
       (self as any).__CERT_HASH = msg.certHash;
-      await handleStart(msg.wtUrl, msg.config, msg.subdomain);
+      await handleStart(msg.wtUrl, msg.wsUrl, msg.config, msg.subdomain);
       break;
     case "stop":
       handleStop();
@@ -410,15 +614,15 @@ self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
       enqueueChunkBatchDone(msg.count);
       break;
     case "regenerate_chunks":
-      if (wasmModule && activeStreamWriter) {
+      if (wasmModule && activeStream) {
         sentChunks.clear();
         requestChunks();
       }
       break;
     case "set_public":
-      if (controlWriter) {
+      if (controlStream) {
         const payload = JSON.stringify({ public: msg.public });
-        controlWriter.write(new TextEncoder().encode(payload)).catch(() => {});
+        controlStream.write(new TextEncoder().encode(payload)).catch(() => {});
         postMsg({ type: "log", level: "info", category: "transport", message: `Server visibility: ${msg.public ? "public" : "private"}` });
       }
       break;

@@ -84,7 +84,9 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
       .then((cfg: { certHash: string; wtPort: number }) => {
         const wtHost = window.location.hostname;
         const wtUrl = `https://${wtHost}:${cfg.wtPort}/connect`;
-        bridge.start(wtUrl, cfg.certHash, config, config.subdomain);
+        const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${wsProto}//${window.location.host}/ws`;
+        bridge.start(wtUrl, wsUrl, cfg.certHash, config, config.subdomain);
       })
       .catch((err) => {
         setError(`Failed to fetch server config: ${err}`);

@@ -1,43 +1,41 @@
 package router
 
 import (
-	"context"
+	"io"
 	"sync"
-
-	"github.com/quic-go/webtransport-go"
 )
 
-// Session represents a connected browser host's WebTransport session.
-type Session struct {
-	WT *webtransport.Session
+// Stream is a bidirectional byte stream (WebTransport stream or WebSocket conn).
+type Stream interface {
+	io.Reader
+	io.Writer
+	Close() error
 }
 
-// OpenStream opens a new bidirectional stream on the WebTransport session.
-func (s *Session) OpenStream(ctx context.Context) (*webtransport.Stream, error) {
-	return s.WT.OpenStreamSync(ctx)
+// Session represents a connected browser host that can accept new streams.
+type Session interface {
+	// OpenStream opens a new bidirectional stream to the browser.
+	OpenStream() (Stream, error)
+	// Close terminates the session.
+	Close()
+	// Done returns a channel closed when the session ends.
+	Done() <-chan struct{}
 }
 
-// Router maps subdomain names to active WebTransport sessions.
+// Router maps subdomain names to active sessions.
 type Router struct {
 	mu       sync.RWMutex
-	sessions map[string]*Session
+	sessions map[string]Session
 }
 
 // New creates an empty Router.
 func New() *Router {
-	return &Router{sessions: make(map[string]*Session)}
-}
-
-// Register adds a session for the given subdomain (overwrites if exists).
-func (r *Router) Register(subdomain string, session *Session) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.sessions[subdomain] = session
+	return &Router{sessions: make(map[string]Session)}
 }
 
 // TryRegister registers only if the subdomain is not already taken.
 // Returns true if registered, false if the name is already in use.
-func (r *Router) TryRegister(subdomain string, session *Session) bool {
+func (r *Router) TryRegister(subdomain string, session Session) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.sessions[subdomain]; exists {
@@ -48,7 +46,7 @@ func (r *Router) TryRegister(subdomain string, session *Session) bool {
 }
 
 // Lookup returns the session for a subdomain, or nil if not found.
-func (r *Router) Lookup(subdomain string) *Session {
+func (r *Router) Lookup(subdomain string) Session {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.sessions[subdomain]
