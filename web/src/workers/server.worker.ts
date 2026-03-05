@@ -846,6 +846,93 @@ async function handleStream(stream: StreamHandle): Promise<void> {
           });
         }
       }
+
+      // Check for entity flags changes (sneaking/sprinting/elytra) and broadcast
+      if (playerJoined) {
+        if (wasmModule.get_entity_flags_dirty(connectionId)) {
+          wasmModule.clear_entity_flags_dirty(connectionId);
+          const flags = wasmModule.get_entity_flags(connectionId) as number;
+          const pose = wasmModule.get_entity_pose(connectionId) as number;
+          // Send to all players (including self for 3rd person)
+          for (const [, other] of sessions) {
+            if (!other.inPlay) continue;
+            try {
+              const bytes = new Uint8Array(wasmModule.build_entity_flags(other.connectionId, session.entityId, flags, pose));
+              if (bytes.length > 0) other.stream.write(bytes).catch(() => {});
+            } catch {}
+          }
+        }
+      }
+
+      // Check for swing arm animation and broadcast to others
+      if (playerJoined) {
+        if (wasmModule.get_pending_swing(connectionId)) {
+          wasmModule.clear_pending_swing(connectionId);
+          broadcastExcept(connectionId, (targetId) => {
+            return new Uint8Array(wasmModule.build_entity_animation(targetId, session.entityId, 0)); // 0 = SwingMainArm
+          });
+        }
+      }
+
+      // Check for pending attacks (PvP)
+      if (playerJoined) {
+        const attacksStr = wasmModule.get_pending_attacks(connectionId) as string;
+        if (attacksStr) {
+          const targetEntityIds = JSON.parse(attacksStr) as number[];
+          for (const targetEntityId of targetEntityIds) {
+            // Find the victim session
+            let victim: ClientSession | undefined;
+            for (const [, s] of sessions) {
+              if (s.entityId === targetEntityId && s.inPlay) {
+                victim = s;
+                break;
+              }
+            }
+            if (!victim) continue;
+
+            // Creative mode players are invulnerable
+            const victimGamemode = wasmModule.get_gamemode(victim.connectionId) as number;
+            if (victimGamemode === 1) continue; // Creative = invulnerable
+
+            // Calculate knockback direction from attacker to victim
+            const dx = victim.x - session.x;
+            const dz = victim.z - session.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            const knockbackStrength = 0.4;
+            const kx = dist > 0 ? (dx / dist) * knockbackStrength : 0;
+            const ky = 0.36;
+            const kz = dist > 0 ? (dz / dist) * knockbackStrength : 0;
+
+            // Deal 1 damage
+            const currentHealth = wasmModule.get_health(victim.connectionId) as number;
+            const newHealth = Math.max(0, currentHealth - 1);
+            wasmModule.set_health(victim.connectionId, newHealth);
+
+            // Calculate hit yaw (direction damage came from)
+            const hitYaw = Math.atan2(dz, dx) * (180 / Math.PI) - 90;
+
+            // Send damage packets to ALL players (hurt animation + damage event + velocity)
+            for (const [, other] of sessions) {
+              if (!other.inPlay) continue;
+              try {
+                const bytes = new Uint8Array(wasmModule.build_damage_packets(
+                  other.connectionId, victim.entityId, session.entityId,
+                  hitYaw, kx, ky, kz
+                ));
+                if (bytes.length > 0) other.stream.write(bytes).catch(() => {});
+              } catch {}
+            }
+
+            // Send health update to victim
+            try {
+              const healthBytes = new Uint8Array(wasmModule.build_set_health(victim.connectionId, newHealth));
+              if (healthBytes.length > 0) victim.stream.write(healthBytes).catch(() => {});
+            } catch {}
+
+            // TODO: handle death (newHealth <= 0) — respawn flow
+          }
+        }
+      }
     }
   } catch (err) {
     postMsg({ type: "log", level: "debug", category: "transport", message: `Stream ended (${session.username || connectionId}): ${err}` });

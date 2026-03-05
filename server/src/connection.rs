@@ -78,6 +78,13 @@ pub struct Connection {
     pub hotbar_items: [i32; 9],
     pub pending_block_events: Vec<BlockEvent>,
     pub item_to_block: HashMap<i32, i32>,
+    pub entity_flags: u8,
+    pub entity_pose: u8,
+    pub entity_flags_dirty: bool,
+    pub pending_attacks: Vec<i32>,
+    pub health: f32,
+    pub gamemode: u8,
+    pub pending_swing: bool,
     logger: Box<dyn Logger>,
     registry: PacketRegistry,
 }
@@ -118,6 +125,13 @@ impl Connection {
             hotbar_items: [0; 9],
             pending_block_events: Vec::new(),
             item_to_block: HashMap::new(),
+            entity_flags: 0,
+            entity_pose: 0, // Standing
+            entity_flags_dirty: false,
+            pending_attacks: Vec::new(),
+            health: 20.0,
+            gamemode: 1, // Creative
+            pending_swing: false,
             logger,
             registry: PacketRegistry::default_registry(),
         }
@@ -152,6 +166,13 @@ impl Connection {
         self.held_slot = 0;
         self.hotbar_items = [0; 9];
         self.pending_block_events.clear();
+        self.entity_flags = 0;
+        self.entity_pose = 0;
+        self.entity_flags_dirty = false;
+        self.pending_attacks.clear();
+        self.health = 20.0;
+        self.gamemode = 1;
+        self.pending_swing = false;
         self.stats.player_count = 0;
         self.stats.connected_at_ms = 0.0;
         self.log(LogLevel::Debug, LogCategory::System, "Connection state reset to Handshaking");
@@ -258,6 +279,13 @@ impl Connection {
                 hotbar_items: &mut self.hotbar_items,
                 pending_block_events: &mut self.pending_block_events,
                 item_to_block: &self.item_to_block,
+                entity_flags: &mut self.entity_flags,
+                entity_pose: &mut self.entity_pose,
+                entity_flags_dirty: &mut self.entity_flags_dirty,
+                pending_attacks: &mut self.pending_attacks,
+                health: &mut self.health,
+                gamemode: &mut self.gamemode,
+                pending_swing: &mut self.pending_swing,
             };
 
             let result = handler.handle(&payload, &mut ctx);

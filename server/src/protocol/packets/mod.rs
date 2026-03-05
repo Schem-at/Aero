@@ -22,3 +22,8 @@ pub mod chat_command;
 pub mod player_position;
 pub mod player_abilities;
 pub mod block_events;
+pub mod player_input;
+pub mod player_command;
+pub mod interact;
+pub mod pick_item;
+pub mod swing_arm;

@@ -30,6 +30,7 @@ impl PacketHandler for ChatCommandHandler {
             "fly" => handle_fly(ctx, threshold),
             "time" => handle_time(args, ctx, threshold),
             "tp" => handle_tp(args, ctx, threshold),
+            "gamemode" | "gm" => handle_gamemode(args, ctx, threshold),
             "help" => handle_help(ctx, threshold),
             _ => {
                 let msg = format!("Unknown command: /{}", cmd);
@@ -199,8 +200,75 @@ fn handle_tp(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketResu
     }
 }
 
+fn handle_gamemode(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketResult {
+    let gm = match args.trim() {
+        "survival" | "s" | "0" => 0u8,
+        "creative" | "c" | "1" => 1,
+        "adventure" | "a" | "2" => 2,
+        "spectator" | "sp" | "3" => 3,
+        _ => {
+            let msg = "Usage: /gamemode <survival|creative|adventure|spectator>";
+            let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+            return PacketResult::RawResponse(chat);
+        }
+    };
+
+    *ctx.gamemode = gm;
+    *ctx.health = 20.0;
+
+    let mut response = Vec::new();
+
+    // Game Event: Change Game Mode (event=3, value=gamemode)
+    response.extend_from_slice(&compress_packet(
+        0x26,
+        &world::build_game_event(3, gm as f32),
+        threshold,
+    ));
+
+    // Update Player Abilities based on gamemode
+    let (allow_fly, invulnerable) = match gm {
+        0 => (false, false), // Survival
+        1 => (true, true),   // Creative
+        2 => (false, false), // Adventure
+        3 => (true, true),   // Spectator
+        _ => (false, false),
+    };
+    let flags: u8 = if invulnerable { 0x01 } else { 0 }
+        | if *ctx.is_flying && allow_fly { 0x02 } else { 0 }
+        | if allow_fly { 0x04 } else { 0 }
+        | if gm == 1 { 0x08 } else { 0 }; // creative = instant break
+
+    // Build Player Abilities packet manually (flags, fly_speed, walk_speed)
+    let mut abilities = Vec::new();
+    abilities.push(flags);
+    abilities.extend_from_slice(&ctx.fly_speed.to_be_bytes());
+    abilities.extend_from_slice(&0.1f32.to_be_bytes()); // walk speed
+    response.extend_from_slice(&compress_packet(0x3E, &abilities, threshold));
+
+    // If switching to survival, disable flying
+    if !allow_fly && *ctx.is_flying {
+        *ctx.is_flying = false;
+    }
+
+    // Send health update for survival
+    let health_payload = world::build_set_health_payload(*ctx.health, 20, 5.0);
+    response.extend_from_slice(&compress_packet(0x66, &health_payload, threshold));
+
+    let gm_name = match gm {
+        0 => "Survival",
+        1 => "Creative",
+        2 => "Adventure",
+        3 => "Spectator",
+        _ => "Unknown",
+    };
+    let msg = format!("Game mode set to {}", gm_name);
+    ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
+    response.extend_from_slice(&compress_packet(0x77, &world::build_system_chat_payload(&msg), threshold));
+    PacketResult::RawResponse(response)
+}
+
 fn handle_help(ctx: &mut HandlerContext, threshold: i32) -> PacketResult {
-    let msg = "Commands: /speed <0-10>, /fly, /tp <player|x y z>, /time <day|night|noon|midnight|ticks>, /help";
+    let msg = "Commands: /speed <0-10>, /fly, /tp <player|x y z>, /time <day|night|noon|midnight|ticks>, /gamemode <survival|creative>, /help";
     ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
     let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
     PacketResult::RawResponse(chat)

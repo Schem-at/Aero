@@ -51,6 +51,12 @@ impl PacketHandler for PlayerActionHandler {
 
         let (status, off) = read_varint(payload);
 
+        // Status 3 = Drop item stack (Ctrl+Q), 4 = Drop item (Q)
+        // We acknowledge but don't spawn item entities (creative mode / simplified)
+        if status == 3 || status == 4 {
+            return PacketResult::None;
+        }
+
         // Status 0 = Started Digging (instant break in creative mode)
         if status != 0 {
             return PacketResult::None;

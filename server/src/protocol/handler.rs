@@ -45,6 +45,13 @@ pub struct HandlerContext<'a> {
     pub hotbar_items: &'a mut [i32; 9],
     pub pending_block_events: &'a mut Vec<BlockEvent>,
     pub item_to_block: &'a HashMap<i32, i32>,
+    pub entity_flags: &'a mut u8,
+    pub entity_pose: &'a mut u8,
+    pub entity_flags_dirty: &'a mut bool,
+    pub pending_attacks: &'a mut Vec<i32>,
+    pub health: &'a mut f32,
+    pub gamemode: &'a mut u8,
+    pub pending_swing: &'a mut bool,
 }
 
 impl<'a> HandlerContext<'a> {
@@ -199,14 +206,21 @@ impl PacketRegistry {
             Box::new(player_position::PlayerPositionHandler));
         reg.register(ConnectionState::Play, 0x20,
             Box::new(player_position::PlayerPositionHandler));
-        reg.register(ConnectionState::Play, 0x23, // Entity Position Sync (client → server acknowledgement)
-            Box::new(play_ignore::SilentHandler { name: "Entity Position Sync" }));
-        reg.register(ConnectionState::Play, 0x29, // Player Command (sprint/sneak/elytra)
-            Box::new(play_ignore::SilentHandler { name: "Player Command" }));
-        reg.register(ConnectionState::Play, 0x2A, // was incorrectly 0x29
-            Box::new(play_ignore::SilentHandler { name: "Player Input" }));
-        reg.register(ConnectionState::Play, 0x3C, // was incorrectly 0x2A
-            Box::new(play_ignore::SilentHandler { name: "Swing Arm" }));
+        // Interact (0x19) — entity interaction (attack/right-click)
+        reg.register(ConnectionState::Play, 0x19,
+            Box::new(interact::InteractHandler));
+        reg.register(ConnectionState::Play, 0x23, // Pick Item From Block
+            Box::new(pick_item::PickItemFromBlockHandler));
+        reg.register(ConnectionState::Play, 0x24, // Pick Item From Entity
+            Box::new(pick_item::PickItemFromEntityHandler));
+        reg.register(ConnectionState::Play, 0x25, // Ping Request (play)
+            Box::new(play_ignore::SilentHandler { name: "Ping Request" }));
+        reg.register(ConnectionState::Play, 0x29, // Player Command (sprint/elytra)
+            Box::new(player_command::PlayerCommandHandler));
+        reg.register(ConnectionState::Play, 0x2A, // Player Input (movement/sneak/sprint bitflags)
+            Box::new(player_input::PlayerInputHandler));
+        reg.register(ConnectionState::Play, 0x3C,
+            Box::new(swing_arm::SwingArmHandler));
 
         // Chat packets
         reg.register(

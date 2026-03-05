@@ -774,6 +774,214 @@ mod wasm_exports {
         });
     }
 
+    /// Build Set Entity Data for entity flags + pose (sneaking/sprinting visual).
+    #[wasm_bindgen]
+    pub fn build_entity_flags(target_id: u32, entity_id: i32, flags: u8, pose: u8) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let payload = crate::world::build_entity_flags_payload(entity_id, flags, pose);
+                let data = crate::compression::compress_packet(0x61, &payload, threshold);
+                if let Some(ref mut cipher) = conn.cipher {
+                    let mut encrypted = data;
+                    cipher.encrypt(&mut encrypted);
+                    encrypted
+                } else {
+                    data
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn get_entity_flags_dirty(id: u32) -> bool {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.entity_flags_dirty).unwrap_or(false)
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn clear_entity_flags_dirty(id: u32) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.entity_flags_dirty = false;
+            }
+        });
+    }
+
+    #[wasm_bindgen]
+    pub fn get_entity_flags(id: u32) -> u8 {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.entity_flags).unwrap_or(0)
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn get_entity_pose(id: u32) -> u8 {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.entity_pose).unwrap_or(0)
+        })
+    }
+
+    /// Build Entity Animation (0x02) — swing arm etc.
+    #[wasm_bindgen]
+    pub fn build_entity_animation(target_id: u32, entity_id: i32, animation: u8) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let payload = crate::world::build_entity_animation_payload(entity_id, animation);
+                let data = crate::compression::compress_packet(0x02, &payload, threshold);
+                if let Some(ref mut cipher) = conn.cipher {
+                    let mut encrypted = data;
+                    cipher.encrypt(&mut encrypted);
+                    encrypted
+                } else {
+                    data
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn get_pending_swing(id: u32) -> bool {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.pending_swing).unwrap_or(false)
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn clear_pending_swing(id: u32) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.pending_swing = false;
+            }
+        });
+    }
+
+    /// Get pending attacks (entity IDs) as JSON array. Returns empty string if none.
+    #[wasm_bindgen]
+    pub fn get_pending_attacks(id: u32) -> String {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                if conn.pending_attacks.is_empty() {
+                    return String::new();
+                }
+                let attacks = std::mem::take(&mut conn.pending_attacks);
+                serde_json::to_string(&attacks).unwrap_or_default()
+            } else {
+                String::new()
+            }
+        })
+    }
+
+    /// Build Hurt Animation (0x29) + Damage Event (0x19) + Entity Velocity (0x63) for PvP hit.
+    #[wasm_bindgen]
+    pub fn build_damage_packets(target_id: u32, victim_entity_id: i32, attacker_entity_id: i32, yaw: f32, vx: f64, vy: f64, vz: f64) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let mut data = Vec::new();
+                // Hurt Animation (0x29)
+                data.extend_from_slice(&crate::compression::compress_packet(
+                    0x29,
+                    &crate::world::build_hurt_animation_payload(victim_entity_id, yaw),
+                    threshold,
+                ));
+                // Damage Event (0x19) — source_type 34 = player_attack
+                data.extend_from_slice(&crate::compression::compress_packet(
+                    0x19,
+                    &crate::world::build_damage_event_payload(victim_entity_id, 34, attacker_entity_id),
+                    threshold,
+                ));
+                // Entity Velocity (0x63)
+                data.extend_from_slice(&crate::compression::compress_packet(
+                    0x63,
+                    &crate::world::build_entity_velocity_payload(victim_entity_id, vx, vy, vz),
+                    threshold,
+                ));
+                if let Some(ref mut cipher) = conn.cipher {
+                    cipher.encrypt(&mut data);
+                }
+                data
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    /// Build Set Health (0x66) to send to a player.
+    #[wasm_bindgen]
+    pub fn build_set_health(target_id: u32, health: f32) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let payload = crate::world::build_set_health_payload(health, 20, 5.0);
+                let data = crate::compression::compress_packet(0x66, &payload, threshold);
+                if let Some(ref mut cipher) = conn.cipher {
+                    let mut encrypted = data;
+                    cipher.encrypt(&mut encrypted);
+                    encrypted
+                } else {
+                    data
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    /// Get/set health for a connection.
+    #[wasm_bindgen]
+    pub fn get_health(id: u32) -> f32 {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.health).unwrap_or(0.0)
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn set_health(id: u32, health: f32) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.health = health;
+            }
+        });
+    }
+
+    #[wasm_bindgen]
+    pub fn get_gamemode(id: u32) -> u8 {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.gamemode).unwrap_or(1)
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn set_gamemode(id: u32, gamemode: u8) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.gamemode = gamemode;
+            }
+        });
+    }
+
     /// Teleport a player to coordinates (called from JS after resolving /tp <player>).
     /// Returns the encrypted response bytes (Set Center Chunk + Sync Position + chat).
     #[wasm_bindgen]
