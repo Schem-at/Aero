@@ -724,12 +724,14 @@ pub fn build_spawn_entity_payload(entity_id: i32, uuid: &str, x: f64, y: f64, z:
     } else {
         p.extend_from_slice(&[0u8; 16]);
     }
-    // Type (VarInt) — minecraft:player = 128 in protocol 774
-    p.extend_from_slice(&write_varint(128));
+    // Type (VarInt) — minecraft:player = 148 in protocol 774
+    p.extend_from_slice(&write_varint(148));
     // X, Y, Z (f64)
     p.extend_from_slice(&x.to_be_bytes());
     p.extend_from_slice(&y.to_be_bytes());
     p.extend_from_slice(&z.to_be_bytes());
+    // Velocity (lpVec3) — zero vector = single byte 0x00
+    p.push(0x00);
     // Pitch, Yaw (angle = byte, 256/360 degrees)
     p.push(angle_to_byte(pitch));
     p.push(angle_to_byte(yaw));
@@ -737,14 +739,10 @@ pub fn build_spawn_entity_payload(entity_id: i32, uuid: &str, x: f64, y: f64, z:
     p.push(angle_to_byte(yaw));
     // Data (VarInt) — 0 for players
     p.extend_from_slice(&write_varint(0));
-    // Velocity X, Y, Z (i16) — 0
-    p.extend_from_slice(&0i16.to_be_bytes());
-    p.extend_from_slice(&0i16.to_be_bytes());
-    p.extend_from_slice(&0i16.to_be_bytes());
     p
 }
 
-/// Build Entity Teleport (0x75) payload.
+/// Build Entity Teleport (0x7b) payload.
 pub fn build_entity_teleport_payload(entity_id: i32, x: f64, y: f64, z: f64, yaw: f32, pitch: f32, on_ground: bool) -> Vec<u8> {
     let mut p = Vec::new();
     // Entity ID (VarInt)
@@ -753,15 +751,9 @@ pub fn build_entity_teleport_payload(entity_id: i32, x: f64, y: f64, z: f64, yaw
     p.extend_from_slice(&x.to_be_bytes());
     p.extend_from_slice(&y.to_be_bytes());
     p.extend_from_slice(&z.to_be_bytes());
-    // Velocity X, Y, Z (f64) — 0
-    p.extend_from_slice(&0.0f64.to_be_bytes());
-    p.extend_from_slice(&0.0f64.to_be_bytes());
-    p.extend_from_slice(&0.0f64.to_be_bytes());
-    // Yaw, Pitch (float)
-    p.extend_from_slice(&yaw.to_be_bytes());
-    p.extend_from_slice(&pitch.to_be_bytes());
-    // Flags (i32) — all absolute
-    p.extend_from_slice(&0i32.to_be_bytes());
+    // Yaw, Pitch (angle bytes)
+    p.push(angle_to_byte(yaw));
+    p.push(angle_to_byte(pitch));
     // On Ground
     p.push(if on_ground { 1 } else { 0 });
     p

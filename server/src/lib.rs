@@ -443,7 +443,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_entity_teleport_payload(entity_id, x, y, z, yaw, pitch, on_ground);
-                let data = crate::compression::compress_packet(0x75, &payload, threshold);
+                let data = crate::compression::compress_packet(0x7b, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -465,7 +465,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_head_rotation_payload(entity_id, yaw);
-                let data = crate::compression::compress_packet(0x50, &payload, threshold);
+                let data = crate::compression::compress_packet(0x51, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -489,7 +489,7 @@ mod wasm_exports {
                 let ids: Vec<i32> = serde_json::from_str(entity_ids_json).unwrap_or_default();
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_remove_entities_payload(&ids);
-                let data = crate::compression::compress_packet(0x47, &payload, threshold);
+                let data = crate::compression::compress_packet(0x4b, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
