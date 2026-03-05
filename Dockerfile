@@ -7,9 +7,10 @@ WORKDIR /app/server
 COPY server/Cargo.toml server/Cargo.lock ./
 RUN mkdir src && echo "pub fn dummy() {}" > src/lib.rs && \
     cargo build --target wasm32-unknown-unknown --release 2>/dev/null || true
-# Build actual WASM
+# Build actual WASM (remove dummy lib.rs artifact so cargo rebuilds)
 COPY server/src ./src
-RUN wasm-pack build --target web --out-dir /wasm-output
+RUN cargo clean --target wasm32-unknown-unknown --release -p aero-server 2>/dev/null || true && \
+    wasm-pack build --target web --out-dir /wasm-output
 
 # Stage 2: Build web frontend
 FROM oven/bun:latest AS web-builder
