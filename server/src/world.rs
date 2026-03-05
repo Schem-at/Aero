@@ -755,8 +755,8 @@ pub fn build_commands() -> Vec<u8> {
     // Node 23: Literal "gm" (alias → redirects to gamemode node 16)
     p.push(0x08 | 0x01); // type=literal + redirect
     p.extend_from_slice(&write_varint(0)); // 0 children
+    p.extend_from_slice(&write_varint(16)); // redirect to gamemode (must come before name)
     p.extend_from_slice(&write_string("gm"));
-    p.extend_from_slice(&write_varint(16)); // redirect to gamemode
 
     // Root index
     p.extend_from_slice(&write_varint(0));
