@@ -26,13 +26,6 @@ services:
       - ../files/data:/data
       # Persist WebTransport TLS certs so cert hash stays stable across restarts
       - ../files/certs:/etc/aero/certs
-    labels:
-      # Traefik routing — web UI served on port 80 inside container
-      - traefik.enable=true
-      - traefik.http.routers.aero.rule=Host(`${DOMAIN:-aeromc.dev}`)
-      - traefik.http.routers.aero.entrypoints=web,websecure
-      - traefik.http.routers.aero.tls.certResolver=letsencrypt
-      - traefik.http.services.aero.loadbalancer.server.port=80
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
       interval: 30s
