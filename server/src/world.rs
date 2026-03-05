@@ -698,12 +698,11 @@ pub fn build_commands() -> Vec<u8> {
     p.extend_from_slice(&write_varint(6)); // parser=double
     p.push(0x00);
 
-    // Node 15: Argument "player" (entity selector), executable
+    // Node 15: Argument "player" (game_profile — gives player name tab-completion), executable
     p.push(0x04 | 0x02); // type=argument + executable
     p.extend_from_slice(&write_varint(0));
     p.extend_from_slice(&write_string("player"));
-    p.extend_from_slice(&write_varint(7)); // parser=string (single word)
-    p.extend_from_slice(&write_varint(0)); // SINGLE_WORD
+    p.extend_from_slice(&write_varint(7)); // parser=game_profile (no extra data)
 
     // Root index
     p.extend_from_slice(&write_varint(0));
