@@ -240,6 +240,23 @@ export function SettingsPanel() {
             value={config.sky_color}
             onChange={(v) => updateConfig({ sky_color: v })}
           />
+          <ColorField
+            label="Cloud"
+            value={config.cloud_color}
+            onChange={(v) => updateConfig({ cloud_color: v })}
+          />
+        </div>
+        <div className="flex items-center gap-2 mt-2">
+          <label className="text-xs text-muted-foreground w-20">Cloud Height</label>
+          <input
+            type="number"
+            value={config.cloud_height}
+            onChange={(e) => updateConfig({ cloud_height: parseFloat(e.target.value) || 192.33 })}
+            step={0.5}
+            min={0}
+            max={400}
+            className="w-24 px-3 py-1.5 text-sm bg-muted border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary tabular-nums"
+          />
         </div>
       </div>
 

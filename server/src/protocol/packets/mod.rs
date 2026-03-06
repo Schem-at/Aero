@@ -27,3 +27,4 @@ pub mod player_command;
 pub mod interact;
 pub mod pick_item;
 pub mod swing_arm;
+pub mod perform_respawn;

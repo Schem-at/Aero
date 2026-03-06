@@ -7,10 +7,14 @@ use crate::protocol::handler::{HandlerContext, PacketHandler, PacketResult};
 /// Tracks position for chunk loading and multiplayer broadcasting.
 pub struct PlayerPositionHandler;
 
+const FLAG_ELYTRA: u8 = 0x80;
+
 impl PacketHandler for PlayerPositionHandler {
     fn handle(&self, payload: &[u8], ctx: &mut HandlerContext) -> PacketResult {
+        let mut flags_byte: u8 = 0;
+
         match ctx.packet_id {
-            // 0x1D: Position — x (f64), y (f64), z (f64), on_ground (bool)
+            // 0x1D: Position — x (f64), y (f64), z (f64), flags (u8)
             0x1D => {
                 if payload.len() < 24 { return PacketResult::None; }
                 let x = f64::from_be_bytes(payload[0..8].try_into().unwrap());
@@ -20,8 +24,9 @@ impl PacketHandler for PlayerPositionHandler {
                 *ctx.player_y = y;
                 *ctx.player_z = z;
                 *ctx.position_dirty = true;
+                if payload.len() > 24 { flags_byte = payload[24]; }
             }
-            // 0x1E: Position + Rotation — x, y, z (f64), yaw (f32), pitch (f32), on_ground
+            // 0x1E: Position + Rotation — x, y, z (f64), yaw (f32), pitch (f32), flags (u8)
             0x1E => {
                 if payload.len() < 32 { return PacketResult::None; }
                 let x = f64::from_be_bytes(payload[0..8].try_into().unwrap());
@@ -35,8 +40,9 @@ impl PacketHandler for PlayerPositionHandler {
                 *ctx.player_yaw = yaw;
                 *ctx.player_pitch = pitch;
                 *ctx.position_dirty = true;
+                if payload.len() > 32 { flags_byte = payload[32]; }
             }
-            // 0x1F: Rotation — yaw (f32), pitch (f32), on_ground
+            // 0x1F: Rotation — yaw (f32), pitch (f32), flags (u8)
             0x1F => {
                 if payload.len() < 8 { return PacketResult::None; }
                 let yaw = f32::from_be_bytes(payload[0..4].try_into().unwrap());
@@ -44,9 +50,43 @@ impl PacketHandler for PlayerPositionHandler {
                 *ctx.player_yaw = yaw;
                 *ctx.player_pitch = pitch;
                 *ctx.position_dirty = true;
+                if payload.len() > 8 { flags_byte = payload[8]; }
             }
-            // 0x20: On Ground — on_ground (bool) only, no position change
+            // 0x20: On Ground — flags (u8) only
+            0x20 => {
+                if !payload.is_empty() { flags_byte = payload[0]; }
+            }
             _ => {}
+        }
+
+        let new_on_ground = flags_byte & 0x01 != 0;
+
+        // Fall damage: detect landing after a fall
+        if new_on_ground && !*ctx.on_ground {
+            // Just landed — calculate fall distance
+            let fall_distance = *ctx.fall_start_y - *ctx.player_y;
+            if fall_distance > 3.0 && *ctx.gamemode == 0 {
+                // Survival mode fall damage = fall_distance - 3
+                *ctx.pending_fall_damage = (fall_distance - 3.0) as f32;
+            }
+        }
+
+        if !new_on_ground && *ctx.on_ground {
+            // Just left the ground — record start Y
+            *ctx.fall_start_y = *ctx.player_y;
+        }
+
+        // Track highest point during fall (for cases where player goes up then down)
+        if !new_on_ground && *ctx.player_y > *ctx.fall_start_y {
+            *ctx.fall_start_y = *ctx.player_y;
+        }
+
+        *ctx.on_ground = new_on_ground;
+
+        // Clear elytra flag when player touches ground
+        if new_on_ground && (*ctx.entity_flags & FLAG_ELYTRA) != 0 {
+            *ctx.entity_flags &= !FLAG_ELYTRA;
+            *ctx.entity_flags_dirty = true;
         }
 
         // Check if chunk center changed

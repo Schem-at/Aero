@@ -85,6 +85,11 @@ pub struct Connection {
     pub health: f32,
     pub gamemode: u8,
     pub pending_swing: bool,
+    pub pending_respawn: bool,
+    pub on_ground: bool,
+    pub fall_start_y: f64,
+    pub pending_fall_damage: f32,
+    pub held_item_dirty: bool,
     logger: Box<dyn Logger>,
     registry: PacketRegistry,
 }
@@ -132,6 +137,11 @@ impl Connection {
             health: 20.0,
             gamemode: 1, // Creative
             pending_swing: false,
+            pending_respawn: false,
+            on_ground: true,
+            fall_start_y: 65.0,
+            pending_fall_damage: 0.0,
+            held_item_dirty: false,
             logger,
             registry: PacketRegistry::default_registry(),
         }
@@ -286,6 +296,11 @@ impl Connection {
                 health: &mut self.health,
                 gamemode: &mut self.gamemode,
                 pending_swing: &mut self.pending_swing,
+                pending_respawn: &mut self.pending_respawn,
+                on_ground: &mut self.on_ground,
+                fall_start_y: &mut self.fall_start_y,
+                pending_fall_damage: &mut self.pending_fall_damage,
+                held_item_dirty: &mut self.held_item_dirty,
             };
 
             let result = handler.handle(&payload, &mut ctx);

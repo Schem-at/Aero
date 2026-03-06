@@ -926,6 +926,23 @@ pub fn build_entity_flags_payload(entity_id: i32, flags_byte: u8, pose: u8) -> V
     p
 }
 
+/// Build Combat Death (0x42) payload: player_id (VarInt) + message (NBT TAG_String).
+pub fn build_combat_death_payload(player_id: i32, killer_name: &str) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&write_varint(player_id));
+    // Message as NBT TAG_String: "Killed by <killer>"
+    let msg = if killer_name.is_empty() {
+        "You died!".to_string()
+    } else {
+        format!("{} was slain by {}", "", killer_name)
+    };
+    let bytes = msg.as_bytes();
+    p.push(0x08); // TAG_String type
+    p.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+    p.extend_from_slice(bytes);
+    p
+}
+
 /// Build Entity Animation (0x02) payload. animation: 0=SwingMainArm, 3=SwingOffhand
 pub fn build_entity_animation_payload(entity_id: i32, animation: u8) -> Vec<u8> {
     let mut p = Vec::new();
@@ -1007,6 +1024,53 @@ pub fn build_set_health_payload(health: f32, food: i32, saturation: f32) -> Vec<
     p.extend_from_slice(&health.to_be_bytes());
     p.extend_from_slice(&write_varint(food));
     p.extend_from_slice(&saturation.to_be_bytes());
+    p
+}
+
+/// Build Entity Equipment (0x64) payload for main hand item.
+/// item_id = 0 means empty hand.
+pub fn build_entity_equipment_payload(entity_id: i32, item_id: i32) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&write_varint(entity_id));
+    // Slot byte: bit 7 = has more entries (0 = no more), bits 0-6 = slot (0 = main hand)
+    p.push(0x00);
+    if item_id > 0 {
+        p.extend_from_slice(&write_varint(1)); // count = 1
+        p.extend_from_slice(&write_varint(item_id));
+        p.extend_from_slice(&write_varint(0)); // components to add
+        p.extend_from_slice(&write_varint(0)); // components to remove
+    } else {
+        p.extend_from_slice(&write_varint(0)); // count = 0 (empty)
+    }
+    p
+}
+
+/// Build Set Block Destroy Stage (0x05) payload.
+/// stage: 0-9 for progressive breaking, any other value to reset.
+pub fn build_block_destroy_stage_payload(entity_id: i32, x: i32, y: i32, z: i32, stage: i8) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&write_varint(entity_id));
+    let pos = encode_position(x, y, z);
+    p.extend_from_slice(&pos.to_be_bytes());
+    p.push(stage as u8);
+    p
+}
+
+/// Build Entity Position Sync (0x23) payload — lightweight position update for continuous movement.
+/// Unlike Entity Teleport (0x7B), this has no `relatives` bitfield.
+pub fn build_entity_position_sync_payload(entity_id: i32, x: f64, y: f64, z: f64, yaw: f32, pitch: f32, on_ground: bool) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&write_varint(entity_id));
+    p.extend_from_slice(&x.to_be_bytes());
+    p.extend_from_slice(&y.to_be_bytes());
+    p.extend_from_slice(&z.to_be_bytes());
+    // Delta: dX, dY, dZ (f64) — zero for absolute sync
+    p.extend_from_slice(&0.0f64.to_be_bytes());
+    p.extend_from_slice(&0.0f64.to_be_bytes());
+    p.extend_from_slice(&0.0f64.to_be_bytes());
+    p.extend_from_slice(&yaw.to_be_bytes());
+    p.extend_from_slice(&pitch.to_be_bytes());
+    p.push(if on_ground { 1 } else { 0 });
     p
 }
 

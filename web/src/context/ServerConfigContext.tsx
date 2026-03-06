@@ -17,6 +17,8 @@ export interface ServerConfig {
   render_distance: number;
   fog_color: number;
   sky_color: number;
+  cloud_color: number;
+  cloud_height: number;
 }
 
 const STORAGE_KEY = "mc-web-server-config";
@@ -50,6 +52,8 @@ const defaultConfig: ServerConfig = {
   render_distance: 10,
   fog_color: 12638463,  // 0xC0D8FF
   sky_color: 7907327,   // 0x78A7FF
+  cloud_color: 16777215, // 0xFFFFFF (white)
+  cloud_height: 192.33,
 };
 
 function loadConfig(): ServerConfig {

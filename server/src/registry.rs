@@ -31,7 +31,7 @@ fn build_empty_registry(registry_id: &str) -> Vec<u8> {
     build_registry_packet(registry_id, &[])
 }
 
-fn build_dimension_type_registry() -> Vec<u8> {
+fn build_dimension_type_registry(config: &ServerConfig) -> Vec<u8> {
     let mut nbt = NbtWriter::new();
     nbt.byte("has_skylight", 1);
     nbt.byte("has_ceiling", 0);
@@ -40,12 +40,43 @@ fn build_dimension_type_registry() -> Vec<u8> {
     nbt.int("height", 384);
     nbt.int("logical_height", 384);
     nbt.string("infiniburn", "#minecraft:infiniburn_overworld");
-    // "effects" was replaced with "skybox" + "cardinal_light" in protocol 774 (1.21.11)
-    nbt.string("skybox", "overworld");
-    nbt.string("cardinal_light", "default");
+    // skybox + cardinal_light omitted for overworld (defaults)
     nbt.float("ambient_light", 0.0);
-    nbt.int("monster_spawn_light_level", 0);
+    // monster_spawn_light_level as int provider compound (vanilla format)
+    nbt.begin_compound("monster_spawn_light_level");
+    nbt.string("type", "minecraft:uniform");
+    nbt.int("min_inclusive", 0);
+    nbt.int("max_inclusive", 7);
+    nbt.end_compound();
     nbt.int("monster_spawn_block_light_limit", 0);
+    // Attributes — protocol 774 data-driven visual/audio properties
+    // Matches Pumpkin-MC 1.21.11 synced registry format exactly
+    nbt.begin_compound("attributes");
+    nbt.string("minecraft:visual/sky_color", &format!("#{:06x}", config.sky_color));
+    nbt.string("minecraft:visual/fog_color", &format!("#{:06x}", config.fog_color));
+    nbt.string("minecraft:visual/cloud_color", &format!("#cc{:06x}", config.cloud_color));
+    nbt.double("minecraft:visual/cloud_height", config.cloud_height);
+    nbt.begin_compound("minecraft:audio/ambient_sounds");
+    nbt.begin_compound("mood");
+    nbt.string("sound", "minecraft:ambient.cave");
+    nbt.int("tick_delay", 6000);
+    nbt.int("block_search_extent", 8);
+    nbt.double("offset", 2.0);
+    nbt.end_compound(); // mood
+    nbt.end_compound(); // ambient_sounds
+    nbt.begin_compound("minecraft:audio/background_music");
+    nbt.begin_compound("default");
+    nbt.string("sound", "minecraft:music.game");
+    nbt.int("min_delay", 12000);
+    nbt.int("max_delay", 24000);
+    nbt.end_compound(); // default
+    nbt.begin_compound("creative");
+    nbt.string("sound", "minecraft:music.creative");
+    nbt.int("min_delay", 12000);
+    nbt.int("max_delay", 24000);
+    nbt.end_compound(); // creative
+    nbt.end_compound(); // background_music
+    nbt.end_compound(); // attributes
     let nbt_data = nbt.finish();
 
     build_registry_packet("minecraft:dimension_type", &[
@@ -276,7 +307,7 @@ pub fn build_all_registry_packets(threshold: i32, config: &ServerConfig) -> Vec<
     let mut result = Vec::new();
 
     let registries = vec![
-        build_dimension_type_registry(),
+        build_dimension_type_registry(config),
         build_biome_registry(config),
         build_damage_type_registry(),
         build_painting_variant_registry(),
@@ -297,6 +328,10 @@ pub fn build_all_registry_packets(threshold: i32, config: &ServerConfig) -> Vec<
         build_empty_registry("minecraft:jukebox_song"),
         build_empty_registry("minecraft:trim_material"),
         build_empty_registry("minecraft:trim_pattern"),
+        build_empty_registry("minecraft:timeline"),
+        build_empty_registry("minecraft:dialog"),
+        build_empty_registry("minecraft:test_environment"),
+        build_empty_registry("minecraft:test_instance"),
     ];
 
     for payload in registries {
@@ -323,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_dimension_type_has_one_entry() {
-        let payload = build_dimension_type_registry();
+        let payload = build_dimension_type_registry(&ServerConfig::default());
         let (name, name_end) = crate::protocol::types::read_string(&payload);
         assert_eq!(name, "minecraft:dimension_type");
         let (count, _) = read_varint(&payload[name_end..]);

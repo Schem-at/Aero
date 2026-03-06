@@ -242,6 +242,8 @@ interface ClientSession {
   pitch: number;
   // True once the player has fully entered Play state
   inPlay: boolean;
+  // True when the player is dead (waiting for respawn)
+  isDead: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -365,16 +367,16 @@ function onPlayerLeft(session: ClientSession): void {
 /** Broadcast position update from one player to all others. */
 function broadcastPosition(session: ClientSession): void {
   broadcastExcept(session.connectionId, (targetId) => {
-    const teleportBytes = new Uint8Array(wasmModule.build_entity_teleport(
+    const syncBytes = new Uint8Array(wasmModule.build_entity_position_sync(
       targetId, session.entityId,
-      session.x, session.y, session.z, session.yaw, session.pitch, false
+      session.x, session.y, session.z, session.yaw, session.pitch, true
     ));
     const headBytes = new Uint8Array(wasmModule.build_head_rotation(
       targetId, session.entityId, session.yaw
     ));
-    const combined = new Uint8Array(teleportBytes.length + headBytes.length);
-    combined.set(teleportBytes, 0);
-    combined.set(headBytes, teleportBytes.length);
+    const combined = new Uint8Array(syncBytes.length + headBytes.length);
+    combined.set(syncBytes, 0);
+    combined.set(headBytes, syncBytes.length);
     return combined;
   });
 }
@@ -656,6 +658,7 @@ async function handleStream(stream: StreamHandle): Promise<void> {
     x: 8, y: 66, z: 8,
     yaw: 0, pitch: 0,
     inPlay: false,
+    isDead: false,
   };
 
   sessions.set(connectionId, session);
@@ -874,6 +877,57 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         }
       }
 
+      // Check for held item changes and broadcast equipment to other players
+      if (playerJoined) {
+        if (wasmModule.get_held_item_dirty(connectionId)) {
+          wasmModule.clear_held_item_dirty(connectionId);
+          const itemId = wasmModule.get_held_item_id(connectionId) as number;
+          broadcastExcept(connectionId, (targetId) => {
+            return new Uint8Array(wasmModule.build_entity_equipment(targetId, session.entityId, itemId));
+          });
+        }
+      }
+
+      // Check for fall damage
+      if (playerJoined) {
+        const fallDmg = wasmModule.get_pending_fall_damage(connectionId) as number;
+        if (fallDmg > 0) {
+          wasmModule.clear_pending_fall_damage(connectionId);
+          const currentHealth = wasmModule.get_health(connectionId) as number;
+          const newHealth = Math.max(0, currentHealth - fallDmg);
+          wasmModule.set_health(connectionId, newHealth);
+
+          // Send health update to the player
+          try {
+            const healthBytes = new Uint8Array(wasmModule.build_set_health(connectionId, newHealth));
+            if (healthBytes.length > 0) session.stream.write(healthBytes).catch(() => {});
+          } catch {}
+
+          // Send hurt animation to all players
+          for (const [, other] of sessions) {
+            if (!other.inPlay) continue;
+            try {
+              const hurtBytes = new Uint8Array(wasmModule.build_damage_packets(
+                other.connectionId, session.entityId, session.entityId,
+                0, 0, 0, 0 // no knockback for fall damage
+              ));
+              if (hurtBytes.length > 0) other.stream.write(hurtBytes).catch(() => {});
+            } catch {}
+          }
+
+          // Handle death from fall damage
+          if (newHealth <= 0 && !session.isDead) {
+            session.isDead = true;
+            try {
+              const deathBytes = new Uint8Array(wasmModule.build_combat_death(
+                connectionId, session.entityId, ""
+              ));
+              if (deathBytes.length > 0) session.stream.write(deathBytes).catch(() => {});
+            } catch {}
+          }
+        }
+      }
+
       // Check for pending attacks (PvP)
       if (playerJoined) {
         const attacksStr = wasmModule.get_pending_attacks(connectionId) as string;
@@ -929,9 +983,43 @@ async function handleStream(stream: StreamHandle): Promise<void> {
               if (healthBytes.length > 0) victim.stream.write(healthBytes).catch(() => {});
             } catch {}
 
-            // TODO: handle death (newHealth <= 0) — respawn flow
+            // Handle death
+            if (newHealth <= 0 && !victim.isDead) {
+              victim.isDead = true;
+              // Send Combat Death to the victim
+              try {
+                const deathBytes = new Uint8Array(wasmModule.build_combat_death(
+                  victim.connectionId, victim.entityId, session.username || "a player"
+                ));
+                if (deathBytes.length > 0) victim.stream.write(deathBytes).catch(() => {});
+              } catch {}
+            }
           }
         }
+      }
+
+      // Check for pending respawn
+      if (playerJoined && wasmModule.get_pending_respawn(connectionId)) {
+        wasmModule.clear_pending_respawn(connectionId);
+        const gamemode = wasmModule.get_gamemode(connectionId) as number;
+
+        // Send respawn packets (dimension respawn + health reset + wait for chunks event)
+        try {
+          const respawnBytes = new Uint8Array(wasmModule.build_respawn(connectionId, gamemode));
+          if (respawnBytes.length > 0) session.stream.write(respawnBytes).catch(() => {});
+        } catch {}
+
+        // Reset death state (entity_flags/elytra cleared in WASM build_respawn)
+        session.isDead = false;
+
+        // Reset position to spawn and trigger chunk re-send
+        session.x = 8;
+        session.y = 66;
+        session.z = 8;
+        session.sentChunks.clear();
+        session.isInitialSpawn = true;
+        session.batchInFlight = false;
+        session.pendingChunkRequest = false;
       }
     }
   } catch (err) {

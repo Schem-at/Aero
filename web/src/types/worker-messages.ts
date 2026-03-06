@@ -22,6 +22,8 @@ export interface WorkerServerConfig {
   render_distance: number;
   fog_color: number;
   sky_color: number;
+  cloud_color: number;
+  cloud_height: number;
 }
 
 // Worker → Main messages

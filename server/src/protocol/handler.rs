@@ -52,6 +52,11 @@ pub struct HandlerContext<'a> {
     pub health: &'a mut f32,
     pub gamemode: &'a mut u8,
     pub pending_swing: &'a mut bool,
+    pub pending_respawn: &'a mut bool,
+    pub on_ground: &'a mut bool,
+    pub fall_start_y: &'a mut f64,
+    pub pending_fall_damage: &'a mut f32,
+    pub held_item_dirty: &'a mut bool,
 }
 
 impl<'a> HandlerContext<'a> {
@@ -177,6 +182,10 @@ impl PacketRegistry {
             Box::new(keep_alive::KeepAliveHandler),
         );
 
+        // Perform Respawn (0x0B in protocol 774)
+        reg.register(ConnectionState::Play, 0x0B,
+            Box::new(perform_respawn::PerformRespawnHandler));
+
         // Logged but ignored Play packets
         reg.register(ConnectionState::Play, 0x09,
             Box::new(play_ignore::LogHandler { name: "Chat Session Update" }));
@@ -233,6 +242,22 @@ impl PacketRegistry {
             0x06,
             Box::new(chat_command::ChatCommandHandler),
         );
+
+        // Silent handlers for common spam packets
+        reg.register(ConnectionState::Play, 0x0E,
+            Box::new(play_ignore::SilentHandler { name: "Command Suggestion" }));
+        reg.register(ConnectionState::Play, 0x10,
+            Box::new(play_ignore::SilentHandler { name: "Close Container" }));
+        reg.register(ConnectionState::Play, 0x11,
+            Box::new(play_ignore::SilentHandler { name: "Change Container Slot State" }));
+        reg.register(ConnectionState::Play, 0x12,
+            Box::new(play_ignore::SilentHandler { name: "Cookie Response" }));
+        reg.register(ConnectionState::Play, 0x2C,
+            Box::new(play_ignore::SilentHandler { name: "Pong" }));
+        reg.register(ConnectionState::Play, 0x36,
+            Box::new(play_ignore::SilentHandler { name: "Seen Advancements" }));
+        reg.register(ConnectionState::Play, 0x3E,
+            Box::new(play_ignore::SilentHandler { name: "Use Item" }));
 
         reg
     }

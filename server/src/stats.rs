@@ -18,11 +18,17 @@ pub struct ServerConfig {
     pub fog_color: i32,
     #[serde(default = "default_sky_color")]
     pub sky_color: i32,
+    #[serde(default = "default_cloud_color")]
+    pub cloud_color: i32,
+    #[serde(default = "default_cloud_height")]
+    pub cloud_height: f64,
 }
 
 fn default_render_distance() -> u8 { 10 }
 fn default_fog_color() -> i32 { 12638463 }  // 0xC0D8FF
 fn default_sky_color() -> i32 { 7907327 }   // 0x78A7FF
+fn default_cloud_color() -> i32 { 16777215 } // 0xFFFFFF (white)
+fn default_cloud_height() -> f64 { 192.33 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -36,6 +42,8 @@ impl Default for ServerConfig {
             render_distance: default_render_distance(),
             fog_color: default_fog_color(),
             sky_color: default_sky_color(),
+            cloud_color: default_cloud_color(),
+            cloud_height: default_cloud_height(),
         }
     }
 }

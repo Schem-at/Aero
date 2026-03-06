@@ -870,6 +870,24 @@ mod wasm_exports {
         });
     }
 
+    #[wasm_bindgen]
+    pub fn get_pending_respawn(id: u32) -> bool {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.pending_respawn).unwrap_or(false)
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn clear_pending_respawn(id: u32) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.pending_respawn = false;
+            }
+        });
+    }
+
     /// Get pending attacks (entity IDs) as JSON array. Returns empty string if none.
     #[wasm_bindgen]
     pub fn get_pending_attacks(id: u32) -> String {
@@ -939,6 +957,81 @@ mod wasm_exports {
                 } else {
                     data
                 }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    /// Build Combat Death (0x42) packet — sent to the dying player.
+    #[wasm_bindgen]
+    pub fn build_combat_death(target_id: u32, player_entity_id: i32, killer_name: &str) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let payload = crate::world::build_combat_death_payload(player_entity_id, killer_name);
+                let data = crate::compression::compress_packet(0x42, &payload, threshold);
+                if let Some(ref mut cipher) = conn.cipher {
+                    let mut encrypted = data;
+                    cipher.encrypt(&mut encrypted);
+                    encrypted
+                } else {
+                    data
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    /// Build respawn packets: Respawn (0x4D) + health reset + position sync.
+    #[wasm_bindgen]
+    pub fn build_respawn(target_id: u32, gamemode: u8) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let mut rp = Vec::new();
+                rp.extend_from_slice(&crate::protocol::types::write_varint(0)); // dim type
+                rp.extend_from_slice(&crate::protocol::types::write_string("minecraft:overworld"));
+                rp.extend_from_slice(&0i64.to_be_bytes()); // hashed seed
+                rp.push(gamemode); // game mode
+                rp.push(0xFF); // previous game mode
+                rp.push(0); // is debug
+                rp.push(1); // is flat
+                rp.push(0); // has death location
+                rp.extend_from_slice(&crate::protocol::types::write_varint(0)); // portal cooldown
+                rp.extend_from_slice(&crate::protocol::types::write_varint(63)); // sea level
+                rp.push(0); // data kept = 0
+
+                conn.health = 20.0;
+                conn.entity_flags = 0; // clear elytra, sprint, etc.
+                conn.entity_pose = 0; // standing
+                conn.entity_flags_dirty = true;
+                conn.on_ground = true;
+                conn.pending_fall_damage = 0.0;
+                conn.awaiting_chunks = true;
+
+                let mut data = Vec::new();
+                data.extend_from_slice(&crate::compression::compress_packet(0x4D, &rp, threshold));
+                // Set health to 20
+                data.extend_from_slice(&crate::compression::compress_packet(
+                    0x66,
+                    &crate::world::build_set_health_payload(20.0, 20, 5.0),
+                    threshold,
+                ));
+                // Game event: start waiting for chunks (event=13)
+                data.extend_from_slice(&crate::compression::compress_packet(
+                    0x26,
+                    &crate::world::build_game_event(13, 0.0),
+                    threshold,
+                ));
+
+                if let Some(ref mut cipher) = conn.cipher {
+                    cipher.encrypt(&mut data);
+                }
+                data
             } else {
                 Vec::new()
             }
@@ -1049,6 +1142,125 @@ mod wasm_exports {
                 }
             } else {
                 String::new()
+            }
+        })
+    }
+
+    // --- Fall damage ---
+
+    #[wasm_bindgen]
+    pub fn get_pending_fall_damage(id: u32) -> f32 {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.pending_fall_damage).unwrap_or(0.0)
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn clear_pending_fall_damage(id: u32) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.pending_fall_damage = 0.0;
+            }
+        });
+    }
+
+    // --- Held item / equipment ---
+
+    #[wasm_bindgen]
+    pub fn get_held_item_dirty(id: u32) -> bool {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            pool.connections.get(&id).map(|c| c.held_item_dirty).unwrap_or(false)
+        })
+    }
+
+    #[wasm_bindgen]
+    pub fn clear_held_item_dirty(id: u32) {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&id) {
+                conn.held_item_dirty = false;
+            }
+        });
+    }
+
+    #[wasm_bindgen]
+    pub fn get_held_item_id(id: u32) -> i32 {
+        POOL.with(|p| {
+            let pool = p.borrow();
+            if let Some(conn) = pool.connections.get(&id) {
+                let slot = conn.held_slot as usize;
+                conn.hotbar_items[slot.min(8)]
+            } else {
+                0
+            }
+        })
+    }
+
+    /// Build Entity Equipment (0x64) — main hand item visible to other players.
+    #[wasm_bindgen]
+    pub fn build_entity_equipment(target_id: u32, entity_id: i32, item_id: i32) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let payload = crate::world::build_entity_equipment_payload(entity_id, item_id);
+                let data = crate::compression::compress_packet(0x64, &payload, threshold);
+                if let Some(ref mut cipher) = conn.cipher {
+                    let mut encrypted = data;
+                    cipher.encrypt(&mut encrypted);
+                    encrypted
+                } else {
+                    data
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    /// Build Entity Position Sync (0x23) — lightweight position update.
+    #[wasm_bindgen]
+    pub fn build_entity_position_sync(target_id: u32, entity_id: i32, x: f64, y: f64, z: f64, yaw: f32, pitch: f32, on_ground: bool) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let payload = crate::world::build_entity_position_sync_payload(entity_id, x, y, z, yaw, pitch, on_ground);
+                let data = crate::compression::compress_packet(0x23, &payload, threshold);
+                if let Some(ref mut cipher) = conn.cipher {
+                    let mut encrypted = data;
+                    cipher.encrypt(&mut encrypted);
+                    encrypted
+                } else {
+                    data
+                }
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    /// Build Block Destroy Stage (0x05) — mining animation for other players.
+    #[wasm_bindgen]
+    pub fn build_block_destroy_stage(target_id: u32, entity_id: i32, x: i32, y: i32, z: i32, stage: i8) -> Vec<u8> {
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if let Some(conn) = pool.connections.get_mut(&target_id) {
+                let threshold = conn.compression_threshold.unwrap_or(256);
+                let payload = crate::world::build_block_destroy_stage_payload(entity_id, x, y, z, stage);
+                let data = crate::compression::compress_packet(0x05, &payload, threshold);
+                if let Some(ref mut cipher) = conn.cipher {
+                    let mut encrypted = data;
+                    cipher.encrypt(&mut encrypted);
+                    encrypted
+                } else {
+                    data
+                }
+            } else {
+                Vec::new()
             }
         })
     }

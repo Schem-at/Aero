@@ -51,14 +51,15 @@ impl PacketHandler for PlayerActionHandler {
 
         let (status, off) = read_varint(payload);
 
-        // Status 3 = Drop item stack (Ctrl+Q), 4 = Drop item (Q)
-        // We acknowledge but don't spawn item entities (creative mode / simplified)
-        if status == 3 || status == 4 {
+        // Status 1 = Cancelled Digging, 3 = Drop item stack, 4 = Drop item,
+        // 5 = Release Use Item (bow/eat), 6 = Swap Item In Hand
+        if status == 1 || status == 3 || status == 4 || status == 5 || status == 6 {
             return PacketResult::None;
         }
 
         // Status 0 = Started Digging (instant break in creative mode)
-        if status != 0 {
+        // Status 2 = Finished Digging (survival mode completed mining)
+        if status != 0 && status != 2 {
             return PacketResult::None;
         }
 
@@ -175,6 +176,7 @@ impl PacketHandler for SetHeldItemHandler {
             let slot = i16::from_be_bytes([payload[0], payload[1]]);
             if (0..9).contains(&slot) {
                 *ctx.held_slot = slot as u8;
+                *ctx.held_item_dirty = true;
             }
         }
         PacketResult::None
@@ -215,6 +217,11 @@ impl PacketHandler for SetCreativeSlotHandler {
             ctx.hotbar_items[hotbar_index as usize] = item_id;
         } else {
             ctx.hotbar_items[hotbar_index as usize] = 0; // empty
+        }
+
+        // If the changed slot is the currently held slot, mark equipment dirty
+        if hotbar_index as u8 == *ctx.held_slot {
+            *ctx.held_item_dirty = true;
         }
 
         PacketResult::None
