@@ -69,6 +69,21 @@ pub fn decompress_packet(data: &[u8]) -> (i32, Vec<u8>, usize) {
     (packet_id, payload, plen_size + packet_length)
 }
 
+/// Raw zlib compression (for Anvil chunk data).
+pub fn zlib_compress(data: &[u8]) -> Vec<u8> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data).expect("zlib compress failed");
+    encoder.finish().expect("zlib finish failed")
+}
+
+/// Raw zlib decompression (for Anvil chunk data).
+pub fn zlib_decompress(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+    let mut decoder = ZlibDecoder::new(data);
+    let mut buf = Vec::new();
+    decoder.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

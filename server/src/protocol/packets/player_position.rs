@@ -103,7 +103,7 @@ impl PacketHandler for PlayerPositionHandler {
             let mut view_pos = Vec::new();
             view_pos.extend_from_slice(&write_varint(chunk_x));
             view_pos.extend_from_slice(&write_varint(chunk_z));
-            let response = compress_packet(0x5C, &view_pos, threshold);
+            let response = compress_packet(crate::protocol::packet_ids::clientbound::play::UPDATE_VIEW_POSITION, &view_pos, threshold);
 
             *ctx.pending_chunk_center = Some((chunk_x, chunk_z));
             *ctx.awaiting_chunks = true;

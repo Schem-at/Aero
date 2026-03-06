@@ -12,6 +12,7 @@ import { useLogs } from "@/context/LogContext";
 import { useStats } from "@/context/StatsContext";
 import { useServerConfig } from "@/context/ServerConfigContext";
 import { usePlugins } from "@/context/PluginContext";
+import { useWorld, setBridgeWorldActions } from "@/context/WorldContext";
 
 interface WorkerContextValue {
   start: () => void;
@@ -19,6 +20,9 @@ interface WorkerContextValue {
   queueChat: (message: string) => void;
   regenerateChunks: () => void;
   setPublic: (isPublic: boolean) => void;
+  loadWorld: (name: string) => void;
+  unloadWorld: () => void;
+  saveWorld: () => void;
 }
 
 const WorkerContext = createContext<WorkerContextValue | null>(null);
@@ -29,6 +33,7 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
   const { pushStats, pushPacketLog } = useStats();
   const { config } = useServerConfig();
   const { generateChunks, clearChunkCache } = usePlugins();
+  const { setWorldStatus } = useWorld();
   const bridgeRef = useRef<ServerBridge | null>(null);
 
   // Keep a ref to generateChunks so the callback doesn't go stale
@@ -60,6 +65,16 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
     bridge.onRoomAssigned = (room) => {
       setAssignedRoom(room);
     };
+    bridge.onWorldStatus = (loaded, worldName) => {
+      setWorldStatus(loaded, worldName);
+    };
+
+    // Wire up bridge world actions for WorldContext
+    setBridgeWorldActions(
+      (name) => bridge.loadWorld(name),
+      () => bridge.unloadWorld(),
+      () => bridge.saveWorld(),
+    );
     bridge.onChunksNeeded = async (playerId, chunks) => {
       try {
         const gen = generateChunksRef.current;
@@ -113,6 +128,18 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
     bridgeRef.current?.setPublic(isPublic);
   }, []);
 
+  const loadWorld = useCallback((name: string) => {
+    bridgeRef.current?.loadWorld(name);
+  }, []);
+
+  const unloadWorld = useCallback(() => {
+    bridgeRef.current?.unloadWorld();
+  }, []);
+
+  const saveWorld = useCallback(() => {
+    bridgeRef.current?.saveWorld();
+  }, []);
+
   // Push config changes to worker
   useEffect(() => {
     bridgeRef.current?.setConfig(config);
@@ -126,7 +153,7 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <WorkerContext.Provider value={{ start, stop, queueChat, regenerateChunks, setPublic }}>
+    <WorkerContext.Provider value={{ start, stop, queueChat, regenerateChunks, setPublic, loadWorld, unloadWorld, saveWorld }}>
       {children}
     </WorkerContext.Provider>
   );

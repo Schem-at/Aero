@@ -100,163 +100,110 @@ impl PacketRegistry {
 
     pub fn default_registry() -> Self {
         use super::packets::*;
+        use crate::protocol::packet_ids::serverbound as sb;
 
         let mut reg = Self::new();
-        reg.register(
-            ConnectionState::Handshaking,
-            0x00,
-            Box::new(handshake::HandshakeHandler),
-        );
-        reg.register(
-            ConnectionState::Status,
-            0x00,
-            Box::new(status_request::StatusRequestHandler),
-        );
-        reg.register(
-            ConnectionState::Status,
-            0x01,
-            Box::new(ping::PingHandler),
-        );
-        reg.register(
-            ConnectionState::Login,
-            0x00,
-            Box::new(login_start::LoginStartHandler),
-        );
-        reg.register(
-            ConnectionState::Login,
-            0x01,
-            Box::new(encryption_response::EncryptionResponseHandler),
-        );
-        reg.register(
-            ConnectionState::Login,
-            0x03,
-            Box::new(login_acknowledged::LoginAcknowledgedHandler),
-        );
+        reg.register(ConnectionState::Handshaking, sb::handshaking::SET_PROTOCOL,
+            Box::new(handshake::HandshakeHandler));
+        reg.register(ConnectionState::Status, sb::status::PING_START,
+            Box::new(status_request::StatusRequestHandler));
+        reg.register(ConnectionState::Status, sb::status::PING,
+            Box::new(ping::PingHandler));
+        reg.register(ConnectionState::Login, sb::login::LOGIN_START,
+            Box::new(login_start::LoginStartHandler));
+        reg.register(ConnectionState::Login, sb::login::ENCRYPTION_BEGIN,
+            Box::new(encryption_response::EncryptionResponseHandler));
+        reg.register(ConnectionState::Login, sb::login::LOGIN_ACKNOWLEDGED,
+            Box::new(login_acknowledged::LoginAcknowledgedHandler));
 
         // Configuration state handlers
-        reg.register(
-            ConnectionState::Configuration,
-            0x00,
-            Box::new(client_information::ClientInformationHandler),
-        );
-        reg.register(
-            ConnectionState::Configuration,
-            0x02,
-            Box::new(plugin_message::PluginMessageHandler),
-        );
-        reg.register(
-            ConnectionState::Configuration,
-            0x07,
-            Box::new(known_packs::KnownPacksHandler),
-        );
-        reg.register(
-            ConnectionState::Configuration,
-            0x03,
-            Box::new(acknowledge_finish_config::AcknowledgeFinishConfigHandler),
-        );
+        reg.register(ConnectionState::Configuration, sb::configuration::SETTINGS,
+            Box::new(client_information::ClientInformationHandler));
+        reg.register(ConnectionState::Configuration, sb::configuration::CUSTOM_PAYLOAD,
+            Box::new(plugin_message::PluginMessageHandler));
+        reg.register(ConnectionState::Configuration, sb::configuration::SELECT_KNOWN_PACKS,
+            Box::new(known_packs::KnownPacksHandler));
+        reg.register(ConnectionState::Configuration, sb::configuration::FINISH_CONFIGURATION,
+            Box::new(acknowledge_finish_config::AcknowledgeFinishConfigHandler));
 
-        // Play state handlers (protocol 774 — IDs shifted +1 after 0x03 due to new change_gamemode packet)
-        reg.register(
-            ConnectionState::Play,
-            0x00,
-            Box::new(confirm_teleportation::ConfirmTeleportationHandler),
-        );
-        reg.register(
-            ConnectionState::Play,
-            0x0A, // was 0x09 in protocol 769
-            Box::new(chunk_batch_received::ChunkBatchReceivedHandler),
-        );
-        reg.register(
-            ConnectionState::Play,
-            0x0C, // tick_end — 0-byte payload, sent every tick
-            Box::new(tick_end::TickEndHandler),
-        );
-        reg.register(
-            ConnectionState::Play,
-            0x0D, // was 0x0C in protocol 769
-            Box::new(client_settings_play::ClientSettingsPlayHandler),
-        );
-        reg.register(
-            ConnectionState::Play,
-            0x1B, // was 0x1A in protocol 769
-            Box::new(keep_alive::KeepAliveHandler),
-        );
-
-        // Perform Respawn (0x0B in protocol 774)
-        reg.register(ConnectionState::Play, 0x0B,
+        // Play state handlers
+        reg.register(ConnectionState::Play, sb::play::TELEPORT_CONFIRM,
+            Box::new(confirm_teleportation::ConfirmTeleportationHandler));
+        reg.register(ConnectionState::Play, sb::play::CHUNK_BATCH_RECEIVED,
+            Box::new(chunk_batch_received::ChunkBatchReceivedHandler));
+        reg.register(ConnectionState::Play, sb::play::TICK_END,
+            Box::new(tick_end::TickEndHandler));
+        reg.register(ConnectionState::Play, sb::play::SETTINGS,
+            Box::new(client_settings_play::ClientSettingsPlayHandler));
+        reg.register(ConnectionState::Play, sb::play::KEEP_ALIVE,
+            Box::new(keep_alive::KeepAliveHandler));
+        reg.register(ConnectionState::Play, sb::play::CLIENT_COMMAND,
             Box::new(perform_respawn::PerformRespawnHandler));
 
         // Logged but ignored Play packets
-        reg.register(ConnectionState::Play, 0x09,
+        reg.register(ConnectionState::Play, sb::play::CHAT_SESSION_UPDATE,
             Box::new(play_ignore::LogHandler { name: "Chat Session Update" }));
-        reg.register(ConnectionState::Play, 0x15,
+        reg.register(ConnectionState::Play, sb::play::CUSTOM_PAYLOAD,
             Box::new(play_ignore::LogHandler { name: "Plugin Message (Play)" }));
-        reg.register(ConnectionState::Play, 0x28,
+        reg.register(ConnectionState::Play, sb::play::BLOCK_DIG,
             Box::new(block_events::PlayerActionHandler));
-        reg.register(ConnectionState::Play, 0x2B,
+        reg.register(ConnectionState::Play, sb::play::PLAYER_LOADED,
             Box::new(play_ignore::LogHandler { name: "Player Loaded" }));
-        reg.register(ConnectionState::Play, 0x34,
+        reg.register(ConnectionState::Play, sb::play::HELD_ITEM_SLOT,
             Box::new(block_events::SetHeldItemHandler));
-        reg.register(ConnectionState::Play, 0x37,
+        reg.register(ConnectionState::Play, sb::play::SET_CREATIVE_SLOT,
             Box::new(block_events::SetCreativeSlotHandler));
-        reg.register(ConnectionState::Play, 0x3F,
+        reg.register(ConnectionState::Play, sb::play::BLOCK_PLACE,
             Box::new(block_events::UseItemOnHandler));
 
-        // Player Abilities (0x27) — flying toggle
-        reg.register(ConnectionState::Play, 0x27,
+        // Player Abilities — flying toggle
+        reg.register(ConnectionState::Play, sb::play::ABILITIES,
             Box::new(player_abilities::PlayerAbilitiesHandler));
 
-        // Player position packets — track chunk position for ongoing chunk loading
-        reg.register(ConnectionState::Play, 0x1D,
+        // Player position packets
+        reg.register(ConnectionState::Play, sb::play::POSITION,
             Box::new(player_position::PlayerPositionHandler));
-        reg.register(ConnectionState::Play, 0x1E,
+        reg.register(ConnectionState::Play, sb::play::POSITION_LOOK,
             Box::new(player_position::PlayerPositionHandler));
-        reg.register(ConnectionState::Play, 0x1F,
+        reg.register(ConnectionState::Play, sb::play::LOOK,
             Box::new(player_position::PlayerPositionHandler));
-        reg.register(ConnectionState::Play, 0x20,
+        reg.register(ConnectionState::Play, sb::play::FLYING,
             Box::new(player_position::PlayerPositionHandler));
-        // Interact (0x19) — entity interaction (attack/right-click)
-        reg.register(ConnectionState::Play, 0x19,
+        reg.register(ConnectionState::Play, sb::play::USE_ENTITY,
             Box::new(interact::InteractHandler));
-        reg.register(ConnectionState::Play, 0x23, // Pick Item From Block
+        reg.register(ConnectionState::Play, sb::play::PICK_ITEM_FROM_BLOCK,
             Box::new(pick_item::PickItemFromBlockHandler));
-        reg.register(ConnectionState::Play, 0x24, // Pick Item From Entity
+        reg.register(ConnectionState::Play, sb::play::PICK_ITEM_FROM_ENTITY,
             Box::new(pick_item::PickItemFromEntityHandler));
-        reg.register(ConnectionState::Play, 0x25, // Ping Request (play)
+        reg.register(ConnectionState::Play, sb::play::PING_REQUEST,
             Box::new(play_ignore::SilentHandler { name: "Ping Request" }));
-        reg.register(ConnectionState::Play, 0x29, // Player Command (sprint/elytra)
+        reg.register(ConnectionState::Play, sb::play::ENTITY_ACTION,
             Box::new(player_command::PlayerCommandHandler));
-        reg.register(ConnectionState::Play, 0x2A, // Player Input (movement/sneak/sprint bitflags)
+        reg.register(ConnectionState::Play, sb::play::PLAYER_INPUT,
             Box::new(player_input::PlayerInputHandler));
-        reg.register(ConnectionState::Play, 0x3C,
+        reg.register(ConnectionState::Play, sb::play::ARM_ANIMATION,
             Box::new(swing_arm::SwingArmHandler));
 
         // Chat packets
-        reg.register(
-            ConnectionState::Play,
-            0x08,
-            Box::new(chat_message::ChatMessageHandler),
-        );
-        reg.register(
-            ConnectionState::Play,
-            0x06,
-            Box::new(chat_command::ChatCommandHandler),
-        );
+        reg.register(ConnectionState::Play, sb::play::CHAT_MESSAGE,
+            Box::new(chat_message::ChatMessageHandler));
+        reg.register(ConnectionState::Play, sb::play::CHAT_COMMAND,
+            Box::new(chat_command::ChatCommandHandler));
 
         // Silent handlers for common spam packets
-        reg.register(ConnectionState::Play, 0x0E,
+        reg.register(ConnectionState::Play, sb::play::TAB_COMPLETE,
             Box::new(play_ignore::SilentHandler { name: "Command Suggestion" }));
-        reg.register(ConnectionState::Play, 0x10,
+        reg.register(ConnectionState::Play, sb::play::ENCHANT_ITEM,
             Box::new(play_ignore::SilentHandler { name: "Close Container" }));
-        reg.register(ConnectionState::Play, 0x11,
+        reg.register(ConnectionState::Play, sb::play::WINDOW_CLICK,
             Box::new(play_ignore::SilentHandler { name: "Change Container Slot State" }));
-        reg.register(ConnectionState::Play, 0x12,
+        reg.register(ConnectionState::Play, sb::play::CLOSE_WINDOW,
             Box::new(play_ignore::SilentHandler { name: "Cookie Response" }));
-        reg.register(ConnectionState::Play, 0x2C,
+        reg.register(ConnectionState::Play, sb::play::PONG,
             Box::new(play_ignore::SilentHandler { name: "Pong" }));
-        reg.register(ConnectionState::Play, 0x36,
+        reg.register(ConnectionState::Play, sb::play::UPDATE_COMMAND_BLOCK_MINECART,
             Box::new(play_ignore::SilentHandler { name: "Seen Advancements" }));
-        reg.register(ConnectionState::Play, 0x3E,
+        reg.register(ConnectionState::Play, sb::play::USE_ITEM,
             Box::new(play_ignore::SilentHandler { name: "Use Item" }));
 
         reg

@@ -9,6 +9,8 @@ server/pkg/
 # Node / Bun
 web/node_modules/
 web/.bun/
+tools/mc-extract/node_modules/
+tools/mc-extract/bun.lock
 
 # WASM build output (generated)
 web/public/wasm/

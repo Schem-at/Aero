@@ -15,7 +15,7 @@ impl PacketHandler for LoginAcknowledgedHandler {
 
         // Send Known Packs (0x0E) with 0 entries — tells client we have no known packs
         let known_packs_payload = write_varint(0); // 0 known packs
-        let response = compress_packet(0x0E, &known_packs_payload, threshold);
+        let response = compress_packet(crate::protocol::packet_ids::clientbound::configuration::SELECT_KNOWN_PACKS, &known_packs_payload, threshold);
 
         ctx.log(LogLevel::Info, LogCategory::Protocol, "Sent Known Packs (0 entries)");
 

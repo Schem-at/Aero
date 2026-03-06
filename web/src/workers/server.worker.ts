@@ -3,6 +3,7 @@
 
 import type { MainToWorkerMessage, WorkerToMainMessage, WorkerServerConfig } from "@/types/worker-messages";
 import { ITEM_TO_BLOCK } from "@/lib/item-block-map";
+import { RegionStore } from "@/lib/opfs-region-store";
 
 // Polyfill: wasm-bindgen uses window.__mc_server_log
 (globalThis as any).window = globalThis;
@@ -266,6 +267,12 @@ let globalViewDistance = 10;
 // Pre-serialized item→block mapping for WASM connections
 const itemBlockMapJson = JSON.stringify(ITEM_TO_BLOCK);
 
+// ─── World persistence state ────────────────────────────────────────────────
+let regionStore: RegionStore | null = null;
+const loadedChunks = new Map<string, Uint16Array>(); // chunkKey → block states
+const dirtyChunks = new Set<string>();                // chunks needing save
+let autoSaveInterval: ReturnType<typeof setInterval> | null = null;
+
 function chunkKey(cx: number, cz: number): string {
   return `${cx},${cz}`;
 }
@@ -440,11 +447,55 @@ function requestChunksForSession(session: ClientSession): void {
   session.batchInFlight = true;
 
   if (needed.length > 0) {
-    enqueueChunkBatchStart(session);
-    postMsg({ type: "chunks_needed", playerId: session.connectionId, chunks: needed });
+    // Check OPFS/in-memory cache before requesting from main thread
+    loadCachedChunks(session, needed);
   } else {
     enqueueChunkBatchStart(session);
     enqueueChunkBatchDone(session, 0);
+  }
+}
+
+/** Try loading chunks from in-memory cache or OPFS, fall back to main thread for misses. */
+async function loadCachedChunks(session: ClientSession, needed: { cx: number; cz: number }[]): Promise<void> {
+  const misses: { cx: number; cz: number }[] = [];
+  const hits: { cx: number; cz: number; blockStates: Uint16Array }[] = [];
+
+  for (const { cx, cz } of needed) {
+    const key = chunkKey(cx, cz);
+
+    // Check in-memory cache first
+    if (loadedChunks.has(key)) {
+      hits.push({ cx, cz, blockStates: loadedChunks.get(key)! });
+      continue;
+    }
+
+    // Check OPFS
+    if (regionStore && wasmModule) {
+      try {
+        const blockStates = await regionStore.readChunk(cx, cz, wasmModule);
+        if (blockStates) {
+          loadedChunks.set(key, blockStates);
+          hits.push({ cx, cz, blockStates });
+          continue;
+        }
+      } catch {}
+    }
+
+    misses.push({ cx, cz });
+  }
+
+  enqueueChunkBatchStart(session);
+
+  // Send cached hits immediately
+  for (const { cx, cz, blockStates } of hits) {
+    enqueueChunkData(session, cx, cz, blockStates);
+  }
+
+  if (misses.length > 0) {
+    // Request remaining from main thread generator
+    postMsg({ type: "chunks_needed", playerId: session.connectionId, chunks: misses });
+  } else {
+    enqueueChunkBatchDone(session, hits.length);
   }
 }
 
@@ -804,6 +855,9 @@ async function handleStream(stream: StreamHandle): Promise<void> {
         if (blockEventsStr) {
           const events = JSON.parse(blockEventsStr) as { x: number; y: number; z: number; block_state: number }[];
           for (const evt of events) {
+            // Update in-memory chunk data for persistence
+            applyBlockEvent(evt.x, evt.y, evt.z, evt.block_state);
+
             for (const [, other] of sessions) {
               if (!other.inPlay) continue;
               try {
@@ -1058,10 +1112,79 @@ function pushStats(): void {
 }
 
 // ---------------------------------------------------------------------------
+// World persistence helpers
+// ---------------------------------------------------------------------------
+
+/** Update an in-memory chunk with a block change and mark it dirty. */
+function applyBlockEvent(x: number, y: number, z: number, blockState: number): void {
+  const cx = Math.floor(x / 16);
+  const cz = Math.floor(z / 16);
+  const key = chunkKey(cx, cz);
+  const chunk = loadedChunks.get(key);
+  if (!chunk) return;
+
+  // Convert world coords to index within the 98304-entry array
+  const localX = ((x % 16) + 16) % 16;
+  const localZ = ((z % 16) + 16) % 16;
+  const sectionY = Math.floor((y + 64) / 16); // -64 is min Y
+  const localY = ((y + 64) % 16 + 16) % 16;
+  const sectionIdx = sectionY;
+
+  if (sectionIdx < 0 || sectionIdx >= 24) return;
+
+  const index = sectionIdx * 4096 + localY * 256 + localZ * 16 + localX;
+  if (index >= 0 && index < chunk.length) {
+    chunk[index] = blockState;
+    dirtyChunks.add(key);
+  }
+}
+
+/** Save all dirty chunks to OPFS. */
+async function flushDirtyChunks(): Promise<void> {
+  if (!regionStore || !wasmModule || dirtyChunks.size === 0) return;
+
+  const toSave = [...dirtyChunks];
+  dirtyChunks.clear();
+
+  for (const key of toSave) {
+    const chunk = loadedChunks.get(key);
+    if (!chunk) continue;
+    const [cxStr, czStr] = key.split(",");
+    const cx = parseInt(cxStr);
+    const cz = parseInt(czStr);
+    try {
+      await regionStore.writeChunk(cx, cz, chunk, wasmModule);
+    } catch (err) {
+      // Re-mark as dirty on failure
+      dirtyChunks.add(key);
+      postMsg({ type: "log", level: "warn", category: "system", message: `Failed to save chunk ${key}: ${err}` });
+    }
+  }
+}
+
+function startAutoSave(): void {
+  if (autoSaveInterval) return;
+  autoSaveInterval = setInterval(() => {
+    flushDirtyChunks().catch(() => {});
+  }, 30000); // every 30 seconds
+}
+
+function stopAutoSave(): void {
+  if (autoSaveInterval) {
+    clearInterval(autoSaveInterval);
+    autoSaveInterval = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Stop
 // ---------------------------------------------------------------------------
 
 function handleStop(): void {
+  stopAutoSave();
+  // Flush dirty chunks synchronously-ish before teardown
+  flushDirtyChunks().catch(() => {});
+
   if (statsInterval) {
     clearInterval(statsInterval);
     statsInterval = null;
@@ -1077,6 +1200,15 @@ function handleStop(): void {
     activeTransport.close();
     activeTransport = null;
   }
+
+  // Close region store
+  if (regionStore) {
+    regionStore.close();
+    regionStore = null;
+  }
+  loadedChunks.clear();
+  dirtyChunks.clear();
+
   postMsg({ type: "log", level: "info", category: "system", message: "Server stopped" });
   postMsg({ type: "status_change", status: "stopped" });
 }
@@ -1116,6 +1248,11 @@ self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
     case "chunk_data": {
       const session = sessions.get(msg.playerId);
       if (session) {
+        // Store in memory for persistence
+        const key = chunkKey(msg.cx, msg.cz);
+        loadedChunks.set(key, msg.blockStates);
+        dirtyChunks.add(key);
+
         enqueueChunkData(session, msg.cx, msg.cz, msg.blockStates);
       }
       break;
@@ -1141,5 +1278,47 @@ self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
         postMsg({ type: "log", level: "info", category: "transport", message: `Server visibility: ${msg.public ? "public" : "private"}` });
       }
       break;
+    case "world_load": {
+      // Load or create a world for persistence
+      if (regionStore) {
+        await flushDirtyChunks();
+        regionStore.close();
+      }
+      loadedChunks.clear();
+      dirtyChunks.clear();
+
+      regionStore = new RegionStore(msg.worldName);
+      try {
+        await regionStore.init();
+        startAutoSave();
+        postMsg({ type: "log", level: "info", category: "system", message: `World "${msg.worldName}" loaded` });
+        postMsg({ type: "world_status", loaded: true, worldName: msg.worldName });
+      } catch (err) {
+        postMsg({ type: "log", level: "error", category: "system", message: `Failed to load world: ${err}` });
+        regionStore = null;
+        postMsg({ type: "world_status", loaded: false, worldName: null });
+      }
+      break;
+    }
+    case "world_unload": {
+      stopAutoSave();
+      if (regionStore) {
+        await flushDirtyChunks();
+        regionStore.close();
+        regionStore = null;
+      }
+      loadedChunks.clear();
+      dirtyChunks.clear();
+      postMsg({ type: "log", level: "info", category: "system", message: "World unloaded" });
+      postMsg({ type: "world_status", loaded: false, worldName: null });
+      break;
+    }
+    case "world_save": {
+      if (regionStore) {
+        await flushDirtyChunks();
+        postMsg({ type: "log", level: "info", category: "system", message: `World saved (${loadedChunks.size} chunks)` });
+      }
+      break;
+    }
   }
 };

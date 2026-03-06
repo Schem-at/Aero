@@ -206,9 +206,9 @@ impl Connection {
         payload.extend_from_slice(bytes);
         payload.push(0); // overlay = false (shows in chat, not action bar)
         if let Some(threshold) = self.compression_threshold {
-            compress_packet(0x77, &payload, threshold)
+            compress_packet(crate::protocol::packet_ids::clientbound::play::SYSTEM_CHAT, &payload, threshold)
         } else {
-            frame_packet(0x77, &payload)
+            frame_packet(crate::protocol::packet_ids::clientbound::play::SYSTEM_CHAT, &payload)
         }
     }
 
@@ -374,7 +374,7 @@ impl Connection {
                 self.last_keep_alive_ms = now;
                 let keep_alive_id = now as i64;
                 if let Some(threshold) = self.compression_threshold {
-                    let ka_packet = compress_packet(0x2B, &keep_alive_id.to_be_bytes(), threshold);
+                    let ka_packet = compress_packet(crate::protocol::packet_ids::clientbound::play::KEEP_ALIVE, &keep_alive_id.to_be_bytes(), threshold);
                     response.extend_from_slice(&ka_packet);
                 }
             }
@@ -465,7 +465,7 @@ impl Connection {
 
         // 2. Login Success (0x02) — compressed format (new), encrypted
         let login_success_payload = build_login_success_payload(uuid_str, name, &properties, self.protocol_version);
-        let login_success = compress_packet(0x02, &login_success_payload, threshold);
+        let login_success = compress_packet(crate::protocol::packet_ids::clientbound::login::SUCCESS, &login_success_payload, threshold);
 
         self.packet_log.push(PacketLogEntry {
             direction: "out",

@@ -13,4 +13,9 @@ cd "$ROOT/proxy"
 go test ./...
 
 echo ""
+echo "==> Running mc-extract tests..."
+cd "$ROOT/tools/mc-extract"
+bun test
+
+echo ""
 echo "==> All tests passed."

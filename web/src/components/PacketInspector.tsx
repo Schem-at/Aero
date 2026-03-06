@@ -3,6 +3,7 @@ import { useStats } from "@/context/StatsContext";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NbtViewer } from "@/components/NbtViewer";
 import { parsePacketFields, type ParsedField } from "@/lib/packet-parsers";
+import { getPacketName } from "@/lib/generated/packet-names";
 import type { PacketLogEntry } from "@/types/stats";
 
 type Filter = "all" | "unknown" | "Handshaking" | "Status" | "Login" | "Configuration" | "Play";
@@ -31,7 +32,7 @@ export function PacketInspector() {
 
   const filtered = packetLog.filter((entry) => {
     if (filter === "all") return true;
-    if (filter === "unknown") return entry.packet_name === "Unknown";
+    if (filter === "unknown") return entry.packet_name === "Unknown" && !getPacketName(entry.direction, entry.state, entry.packet_id);
     return entry.state === filter;
   });
 
@@ -114,7 +115,11 @@ function PacketRow({
   const defaultTab: DetailTab = hasParsed ? "parsed" : "hex";
   const [tab, setTab] = useState<DetailTab>(defaultTab);
 
-  const isUnknown = entry.packet_name === "Unknown";
+  const resolvedName = entry.packet_name === "Unknown"
+    ? getPacketName(entry.direction, entry.state, entry.packet_id)
+    : undefined;
+  const displayName = resolvedName ?? entry.packet_name;
+  const isUnknown = entry.packet_name === "Unknown" && !resolvedName;
   const isOut = entry.direction === "out";
 
   const rowColor = isUnknown
@@ -139,7 +144,7 @@ function PacketRow({
         <td className="px-2 py-1">{isOut ? "→" : "←"}</td>
         <td className="px-2 py-1">{entry.state}</td>
         <td className="px-2 py-1">0x{entry.packet_id.toString(16).padStart(2, "0")}</td>
-        <td className="px-2 py-1 font-medium">{entry.packet_name}</td>
+        <td className="px-2 py-1 font-medium">{displayName}</td>
         <td className="px-2 py-1 text-right">{entry.size}B</td>
         <td className="px-2 py-1 text-right text-muted-foreground">
           {entry.processing_ns > 0 ? formatNs(entry.processing_ns) : "—"}

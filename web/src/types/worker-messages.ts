@@ -10,7 +10,10 @@ export type MainToWorkerMessage =
   | { type: "chunk_data"; playerId: number; cx: number; cz: number; blockStates: Uint16Array }
   | { type: "chunk_batch_done"; playerId: number; count: number }
   | { type: "regenerate_chunks" }
-  | { type: "set_public"; public: boolean };
+  | { type: "set_public"; public: boolean }
+  | { type: "world_load"; worldName: string }
+  | { type: "world_unload" }
+  | { type: "world_save" };
 
 export interface WorkerServerConfig {
   motd: string;
@@ -33,4 +36,5 @@ export type WorkerToMainMessage =
   | { type: "packet_log"; entries: PacketLogEntry[] }
   | { type: "status_change"; status: "running" | "stopped" | "error"; error?: string }
   | { type: "chunks_needed"; playerId: number; chunks: { cx: number; cz: number }[] }
-  | { type: "room_assigned"; room: string };
+  | { type: "room_assigned"; room: string }
+  | { type: "world_status"; loaded: boolean; worldName: string | null };

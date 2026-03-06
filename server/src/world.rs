@@ -2,6 +2,8 @@
 /// Provides both monolithic (build_play_packets) and split APIs for worker-based chunk generation.
 
 use crate::compression::compress_packet;
+use crate::protocol::packet_ids::clientbound::play as cb;
+use crate::protocol::entity_ids;
 use crate::protocol::types::{write_string, write_varint};
 use std::collections::HashMap;
 
@@ -16,19 +18,14 @@ pub fn build_play_init(
     view_distance: i32,
 ) -> Vec<u8> {
     let mut result = Vec::new();
-    result.extend_from_slice(&compress_packet(0x30, &build_login_play(entity_id, view_distance), threshold));
-    result.extend_from_slice(&compress_packet(0x26, &build_game_event(13, 0.0), threshold));
-    result.extend_from_slice(&compress_packet(0x5F, &build_set_default_spawn(), threshold));
-    // Player Abilities (0x3E) — creative mode with fly enabled
-    result.extend_from_slice(&compress_packet(0x3E, &build_player_abilities(fly_speed, false), threshold));
-    // Player Info Update (0x44) — add player to tab list
-    result.extend_from_slice(&compress_packet(0x44, &build_player_info_update(uuid, username, properties), threshold));
-    // Commands (0x10) — command tree for tab completion
-    result.extend_from_slice(&compress_packet(0x10, &build_commands(), threshold));
-    // Set Time (0x6F) — noon, time progresses naturally
-    result.extend_from_slice(&compress_packet(0x6F, &build_set_time(0, 6000, true), threshold));
-    // View position (chunk batch start is sent by the worker before chunks)
-    result.extend_from_slice(&compress_packet(0x5C, &build_update_view_position(), threshold));
+    result.extend_from_slice(&compress_packet(cb::LOGIN, &build_login_play(entity_id, view_distance), threshold));
+    result.extend_from_slice(&compress_packet(cb::GAME_STATE_CHANGE, &build_game_event(13, 0.0), threshold));
+    result.extend_from_slice(&compress_packet(cb::SPAWN_POSITION, &build_set_default_spawn(), threshold));
+    result.extend_from_slice(&compress_packet(cb::ABILITIES, &build_player_abilities(fly_speed, false), threshold));
+    result.extend_from_slice(&compress_packet(cb::PLAYER_INFO, &build_player_info_update(uuid, username, properties), threshold));
+    result.extend_from_slice(&compress_packet(cb::DECLARE_COMMANDS, &build_commands(), threshold));
+    result.extend_from_slice(&compress_packet(cb::UPDATE_TIME, &build_set_time(0, 6000, true), threshold));
+    result.extend_from_slice(&compress_packet(cb::UPDATE_VIEW_POSITION, &build_update_view_position(), threshold));
     result
 }
 
@@ -36,7 +33,7 @@ pub fn build_play_init(
 /// `block_states` has 98304 entries (16×384×16), indexed `y_offset * 256 + z * 16 + x`
 /// where y_offset ranges 0..384 (corresponding to Y=-64..+319).
 pub fn build_chunk_from_blocks(cx: i32, cz: i32, block_states: &[u16], threshold: i32) -> Vec<u8> {
-    compress_packet(0x2C, &build_chunk_data_from_blocks(cx, cz, block_states), threshold)
+    compress_packet(cb::MAP_CHUNK, &build_chunk_data_from_blocks(cx, cz, block_states), threshold)
 }
 
 /// Build finish packets: Chunk Batch Finished + Synchronize Player Position (initial spawn only).
@@ -47,14 +44,14 @@ pub fn build_play_finish(chunk_count: i32, threshold: i32) -> Vec<u8> {
 /// Build finish packets using the player's actual position.
 pub fn build_play_finish_at(chunk_count: i32, threshold: i32, x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
     let mut result = Vec::new();
-    result.extend_from_slice(&compress_packet(0x0B, &build_chunk_batch_finished(chunk_count), threshold));
-    result.extend_from_slice(&compress_packet(0x46, &build_sync_player_position_at(x, y, z, yaw, pitch), threshold));
+    result.extend_from_slice(&compress_packet(cb::CHUNK_BATCH_FINISHED, &build_chunk_batch_finished(chunk_count), threshold));
+    result.extend_from_slice(&compress_packet(cb::POSITION, &build_sync_player_position_at(x, y, z, yaw, pitch), threshold));
     result
 }
 
 /// Build just the Chunk Batch Finished packet (for ongoing chunk loading, no teleport).
 pub fn build_chunk_batch_end(chunk_count: i32, threshold: i32) -> Vec<u8> {
-    compress_packet(0x0B, &build_chunk_batch_finished(chunk_count), threshold)
+    compress_packet(cb::CHUNK_BATCH_FINISHED, &build_chunk_batch_finished(chunk_count), threshold)
 }
 
 /// Build all Play initialization packets as concatenated compressed bytes.
@@ -62,28 +59,28 @@ pub fn build_chunk_batch_end(chunk_count: i32, threshold: i32) -> Vec<u8> {
 pub fn build_play_packets(entity_id: i32, threshold: i32) -> Vec<u8> {
     let mut result = Vec::new();
 
-    // 1. Login Play (0x30)
-    result.extend_from_slice(&compress_packet(0x30, &build_login_play(entity_id, 10), threshold));
+    // 1. Login Play
+    result.extend_from_slice(&compress_packet(cb::LOGIN, &build_login_play(entity_id, 10), threshold));
 
-    // 2. Game Event (0x26) — Start waiting for level chunks (event=13)
-    result.extend_from_slice(&compress_packet(0x26, &build_game_event(13, 0.0), threshold));
+    // 2. Game Event — Start waiting for level chunks (event=13)
+    result.extend_from_slice(&compress_packet(cb::GAME_STATE_CHANGE, &build_game_event(13, 0.0), threshold));
 
-    // 3. Set Default Spawn Position (0x5F)
-    result.extend_from_slice(&compress_packet(0x5F, &build_set_default_spawn(), threshold));
+    // 3. Set Default Spawn Position
+    result.extend_from_slice(&compress_packet(cb::SPAWN_POSITION, &build_set_default_spawn(), threshold));
 
-    // 4. Update View Position (0x5C) — Set Center Chunk
-    result.extend_from_slice(&compress_packet(0x5C, &build_update_view_position(), threshold));
+    // 4. Update View Position — Set Center Chunk
+    result.extend_from_slice(&compress_packet(cb::UPDATE_VIEW_POSITION, &build_update_view_position(), threshold));
 
-    // 5. Chunk Batch Start (0x0C) — empty payload
-    result.extend_from_slice(&compress_packet(0x0C, &[], threshold));
+    // 5. Chunk Batch Start — empty payload
+    result.extend_from_slice(&compress_packet(cb::CHUNK_BATCH_START, &[], threshold));
 
-    // 6. Chunk Data and Update Light (0x2C) — 5x5 grid centered on (0,0)
+    // 6. Chunk Data and Update Light — 5x5 grid centered on (0,0)
     let mut chunk_count = 0;
     for cx in -2..=2i32 {
         for cz in -2..=2i32 {
             let has_platform = cx == 0 && cz == 0;
             result.extend_from_slice(&compress_packet(
-                0x2C,
+                cb::MAP_CHUNK,
                 &build_chunk_data_at(cx, cz, has_platform),
                 threshold,
             ));
@@ -91,11 +88,11 @@ pub fn build_play_packets(entity_id: i32, threshold: i32) -> Vec<u8> {
         }
     }
 
-    // 7. Chunk Batch Finished (0x0B)
-    result.extend_from_slice(&compress_packet(0x0B, &build_chunk_batch_finished(chunk_count), threshold));
+    // 7. Chunk Batch Finished
+    result.extend_from_slice(&compress_packet(cb::CHUNK_BATCH_FINISHED, &build_chunk_batch_finished(chunk_count), threshold));
 
-    // 8. Synchronize Player Position (0x46)
-    result.extend_from_slice(&compress_packet(0x46, &build_sync_player_position(), threshold));
+    // 8. Synchronize Player Position
+    result.extend_from_slice(&compress_packet(cb::POSITION, &build_sync_player_position(), threshold));
 
     result
 }
@@ -814,8 +811,8 @@ pub fn build_spawn_entity_payload(entity_id: i32, uuid: &str, x: f64, y: f64, z:
     } else {
         p.extend_from_slice(&[0u8; 16]);
     }
-    // Type (VarInt) — minecraft:player = 155 in protocol 774 (1.21.11)
-    p.extend_from_slice(&write_varint(155));
+    // Type (VarInt) — minecraft:player
+    p.extend_from_slice(&write_varint(entity_ids::PLAYER));
     // X, Y, Z (f64)
     p.extend_from_slice(&x.to_be_bytes());
     p.extend_from_slice(&y.to_be_bytes());

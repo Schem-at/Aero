@@ -153,6 +153,20 @@ The included `docker-compose.yml` is configured for Dokploy deployment:
 
 Set environment variables in Dokploy: `DOMAIN`, `ADMIN_USER`, `ADMIN_PASS`, `JWT_SECRET`.
 
+## Protocol Data Generation
+
+Packet IDs, entity types, block states, and other protocol constants are auto-generated from [PrismarineJS minecraft-data](https://github.com/PrismarineJS/minecraft-data) using `mc-extract`. This keeps Rust and TypeScript in sync and makes Minecraft version upgrades a single command.
+
+```bash
+# Regenerate all protocol constants
+./scripts/generate-protocol.sh
+
+# Preview without writing files
+./scripts/generate-protocol.sh --dry-run
+```
+
+See [`docs/mc-extract.md`](docs/mc-extract.md) for full documentation, CLI options, and architecture.
+
 ## Project Structure
 
 ```
@@ -191,9 +205,15 @@ aero/
 │   └── public/             # Logo assets, favicon, WASM output
 ├── deploy/
 │   └── entrypoint.sh       # Docker entrypoint
+├── tools/
+│   └── mc-extract/         # Protocol data code generator (see docs/mc-extract.md)
+├── docs/
+│   └── mc-extract.md       # mc-extract usage and architecture
 ├── scripts/
 │   ├── dev.sh              # Development environment
 │   ├── build.sh            # Production build
+│   ├── test.sh             # Run all tests (Rust + Go + mc-extract)
+│   ├── generate-protocol.sh # Regenerate protocol constants
 │   └── generate-certs.sh   # TLS certificate generation
 ├── Dockerfile              # Multi-stage build
 └── docker-compose.yml      # Dokploy-ready deployment

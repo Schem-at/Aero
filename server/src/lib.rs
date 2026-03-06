@@ -7,11 +7,14 @@ pub mod compression;
 pub mod nbt;
 pub mod registry;
 pub mod world;
+pub mod block_registry;
+pub mod anvil;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm_exports {
     use crate::connection::Connection;
     use crate::logging::WasmLogger;
+    use crate::protocol::packet_ids::clientbound::play as cb;
     use crate::stats::ServerConfig;
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -224,7 +227,7 @@ mod wasm_exports {
             let mut pool = p.borrow_mut();
             if let Some(conn) = pool.connections.get_mut(&id) {
                 let payload = write_string(reason_json);
-                let data = frame_packet(0x00, &payload);
+                let data = frame_packet(crate::protocol::packet_ids::clientbound::login::DISCONNECT, &payload);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -336,7 +339,7 @@ mod wasm_exports {
             let mut pool = p.borrow_mut();
             if let Some(conn) = pool.connections.get_mut(&id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
-                let data = crate::compression::compress_packet(0x0C, &[], threshold);
+                let data = crate::compression::compress_packet(cb::CHUNK_BATCH_START, &[], threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -426,7 +429,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_spawn_entity_payload(entity_id, uuid, x, y, z, yaw, pitch);
-                let data = crate::compression::compress_packet(0x01, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::SPAWN_ENTITY, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -448,7 +451,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_entity_teleport_payload(entity_id, x, y, z, yaw, pitch, on_ground);
-                let data = crate::compression::compress_packet(0x7b, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::ENTITY_TELEPORT, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -470,7 +473,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_head_rotation_payload(entity_id, yaw);
-                let data = crate::compression::compress_packet(0x51, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::ENTITY_HEAD_ROTATION, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -494,7 +497,7 @@ mod wasm_exports {
                 let ids: Vec<i32> = serde_json::from_str(entity_ids_json).unwrap_or_default();
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_remove_entities_payload(&ids);
-                let data = crate::compression::compress_packet(0x4b, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::ENTITY_DESTROY, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -518,7 +521,7 @@ mod wasm_exports {
                 let properties: Vec<(String, String, Option<String>)> =
                     serde_json::from_str(properties_json).unwrap_or_default();
                 let payload = crate::world::build_player_info_update(uuid, username, &properties);
-                let data = crate::compression::compress_packet(0x44, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::PLAYER_INFO, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -540,7 +543,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_player_info_remove_payload(uuid);
-                let data = crate::compression::compress_packet(0x43, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::PLAYER_REMOVE, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -562,7 +565,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_system_chat_payload(message);
-                let data = crate::compression::compress_packet(0x77, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::SYSTEM_CHAT, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -689,7 +692,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::protocol::packets::block_events::build_block_update_payload(x, y, z, block_state);
-                let data = crate::compression::compress_packet(0x08, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::BLOCK_CHANGE, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -731,7 +734,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_entity_metadata_payload(entity_id, skin_parts);
-                let data = crate::compression::compress_packet(0x61, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::ENTITY_METADATA, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -782,7 +785,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_entity_flags_payload(entity_id, flags, pose);
-                let data = crate::compression::compress_packet(0x61, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::ENTITY_METADATA, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -838,7 +841,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_entity_animation_payload(entity_id, animation);
-                let data = crate::compression::compress_packet(0x02, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::ANIMATION, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -913,21 +916,21 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let mut data = Vec::new();
-                // Hurt Animation (0x29)
+                // Hurt Animation
                 data.extend_from_slice(&crate::compression::compress_packet(
-                    0x29,
+                    cb::HURT_ANIMATION,
                     &crate::world::build_hurt_animation_payload(victim_entity_id, yaw),
                     threshold,
                 ));
-                // Damage Event (0x19) — source_type 34 = player_attack
+                // Damage Event — source_type 34 = player_attack
                 data.extend_from_slice(&crate::compression::compress_packet(
-                    0x19,
+                    cb::DAMAGE_EVENT,
                     &crate::world::build_damage_event_payload(victim_entity_id, 34, attacker_entity_id),
                     threshold,
                 ));
-                // Entity Velocity (0x63)
+                // Entity Velocity
                 data.extend_from_slice(&crate::compression::compress_packet(
-                    0x63,
+                    cb::ENTITY_VELOCITY,
                     &crate::world::build_entity_velocity_payload(victim_entity_id, vx, vy, vz),
                     threshold,
                 ));
@@ -949,7 +952,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_set_health_payload(health, 20, 5.0);
-                let data = crate::compression::compress_packet(0x66, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::UPDATE_HEALTH, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -971,7 +974,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_combat_death_payload(player_entity_id, killer_name);
-                let data = crate::compression::compress_packet(0x42, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::DEATH_COMBAT_EVENT, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -1014,16 +1017,16 @@ mod wasm_exports {
                 conn.awaiting_chunks = true;
 
                 let mut data = Vec::new();
-                data.extend_from_slice(&crate::compression::compress_packet(0x4D, &rp, threshold));
+                data.extend_from_slice(&crate::compression::compress_packet(cb::RESPAWN, &rp, threshold));
                 // Set health to 20
                 data.extend_from_slice(&crate::compression::compress_packet(
-                    0x66,
+                    cb::UPDATE_HEALTH,
                     &crate::world::build_set_health_payload(20.0, 20, 5.0),
                     threshold,
                 ));
                 // Game event: start waiting for chunks (event=13)
                 data.extend_from_slice(&crate::compression::compress_packet(
-                    0x26,
+                    cb::GAME_STATE_CHANGE,
                     &crate::world::build_game_event(13, 0.0),
                     threshold,
                 ));
@@ -1101,16 +1104,16 @@ mod wasm_exports {
                 let mut view_pos = Vec::new();
                 view_pos.extend_from_slice(&crate::protocol::types::write_varint(chunk_x));
                 view_pos.extend_from_slice(&crate::protocol::types::write_varint(chunk_z));
-                data.extend_from_slice(&crate::compression::compress_packet(0x5C, &view_pos, threshold));
+                data.extend_from_slice(&crate::compression::compress_packet(cb::UPDATE_VIEW_POSITION, &view_pos, threshold));
                 // Sync Position
                 data.extend_from_slice(&crate::compression::compress_packet(
-                    0x46,
+                    cb::POSITION,
                     &crate::world::build_sync_player_position_at(x, y, z, conn.player_yaw, conn.player_pitch),
                     threshold,
                 ));
                 // Chat confirmation
                 data.extend_from_slice(&crate::compression::compress_packet(
-                    0x77,
+                    cb::SYSTEM_CHAT,
                     &crate::world::build_system_chat_payload(message),
                     threshold,
                 ));
@@ -1207,7 +1210,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_entity_equipment_payload(entity_id, item_id);
-                let data = crate::compression::compress_packet(0x64, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::ENTITY_EQUIPMENT, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -1229,7 +1232,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_entity_position_sync_payload(entity_id, x, y, z, yaw, pitch, on_ground);
-                let data = crate::compression::compress_packet(0x23, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::SYNC_ENTITY_POSITION, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -1251,7 +1254,7 @@ mod wasm_exports {
             if let Some(conn) = pool.connections.get_mut(&target_id) {
                 let threshold = conn.compression_threshold.unwrap_or(256);
                 let payload = crate::world::build_block_destroy_stage_payload(entity_id, x, y, z, stage);
-                let data = crate::compression::compress_packet(0x05, &payload, threshold);
+                let data = crate::compression::compress_packet(cb::BLOCK_BREAK_ANIMATION, &payload, threshold);
                 if let Some(ref mut cipher) = conn.cipher {
                     let mut encrypted = data;
                     cipher.encrypt(&mut encrypted);
@@ -1263,5 +1266,104 @@ mod wasm_exports {
                 Vec::new()
             }
         })
+    }
+
+    // ─── Anvil persistence exports ──────────────────────────────────
+
+    /// Serialize a chunk to Anvil region entry format (compressed NBT, sector-aligned).
+    /// block_states: flat u16 array of 98304 entries (24 sections × 4096).
+    /// Returns sector-aligned bytes ready to write into a region file.
+    #[wasm_bindgen]
+    pub fn anvil_serialize_chunk(cx: i32, cz: i32, block_states: &[u16]) -> Vec<u8> {
+        let (entry, _) = crate::anvil::chunk_nbt::prepare_chunk_for_region(cx, cz, block_states);
+        entry
+    }
+
+    /// Deserialize a chunk from Anvil region entry format.
+    /// Returns: [cx_i32_le, cz_i32_le, ...block_states_u16_le]
+    /// The first 8 bytes are cx and cz as little-endian i32, rest is u16 block states.
+    #[wasm_bindgen]
+    pub fn anvil_deserialize_chunk(entry: &[u8]) -> Vec<u8> {
+        match crate::anvil::chunk_nbt::parse_chunk_from_region(entry) {
+            Ok((cx, cz, block_states)) => {
+                let mut result = Vec::with_capacity(8 + block_states.len() * 2);
+                result.extend_from_slice(&cx.to_le_bytes());
+                result.extend_from_slice(&cz.to_le_bytes());
+                for &state in &block_states {
+                    result.extend_from_slice(&state.to_le_bytes());
+                }
+                result
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Get the region filename for a chunk position. E.g. "r.0.0.mca"
+    #[wasm_bindgen]
+    pub fn anvil_region_filename(cx: i32, cz: i32) -> String {
+        crate::anvil::region_filename(cx, cz)
+    }
+
+    /// Create a new empty 8KB region header.
+    #[wasm_bindgen]
+    pub fn anvil_new_region_header() -> Vec<u8> {
+        crate::anvil::region::RegionHeader::new().to_bytes()
+    }
+
+    /// Parse a region header and return JSON: { chunks: [[lx, lz, offset, count, timestamp], ...] }
+    /// Only includes chunks that are present (non-zero offset).
+    #[wasm_bindgen]
+    pub fn anvil_parse_region_header(header: &[u8]) -> String {
+        let h = crate::anvil::region::RegionHeader::from_bytes(header);
+        let mut entries = Vec::new();
+        for lz in 0..32usize {
+            for lx in 0..32usize {
+                let idx = lz * 32 + lx;
+                let (offset, count) = h.locations[idx];
+                if offset > 0 || count > 0 {
+                    let ts = h.timestamps[idx];
+                    entries.push(format!("[{},{},{},{},{}]", lx, lz, offset, count, ts));
+                }
+            }
+        }
+        format!("{{\"chunks\":[{}]}}", entries.join(","))
+    }
+
+    /// Update a region header: set chunk location at (lx, lz).
+    #[wasm_bindgen]
+    pub fn anvil_update_region_header(
+        header: &[u8], lx: u32, lz: u32, offset: u32, count: u8, timestamp: u32,
+    ) -> Vec<u8> {
+        let mut h = crate::anvil::region::RegionHeader::from_bytes(header);
+        h.set_chunk_location(lx as usize, lz as usize, offset, count, timestamp);
+        h.to_bytes()
+    }
+
+    /// Get the chunk location from a header. Returns JSON: { offset, count } or "null".
+    #[wasm_bindgen]
+    pub fn anvil_chunk_location(header: &[u8], lx: u32, lz: u32) -> String {
+        let h = crate::anvil::region::RegionHeader::from_bytes(header);
+        match h.chunk_range(lx as usize, lz as usize) {
+            Some((byte_offset, byte_len)) => {
+                let idx = (lz as usize & 31) * 32 + (lx as usize & 31);
+                let (sector_offset, sector_count) = h.locations[idx];
+                format!("{{\"offset\":{},\"count\":{},\"byteOffset\":{},\"byteLen\":{}}}",
+                    sector_offset, sector_count, byte_offset, byte_len)
+            }
+            None => "null".to_string(),
+        }
+    }
+
+    /// Get the next free sector offset for append-only allocation.
+    #[wasm_bindgen]
+    pub fn anvil_next_free_sector(header: &[u8]) -> u32 {
+        let h = crate::anvil::region::RegionHeader::from_bytes(header);
+        h.next_free_sector()
+    }
+
+    /// Compute sectors needed for a compressed chunk entry.
+    #[wasm_bindgen]
+    pub fn anvil_sectors_needed(compressed_len: u32) -> u8 {
+        crate::anvil::region::sectors_needed(compressed_len as usize)
     }
 }

@@ -89,7 +89,7 @@ impl PacketHandler for PlayerActionHandler {
 
         // Send Block Changed Ack to the breaking player
         let threshold = ctx.compression_threshold.unwrap_or(256);
-        let ack = compress_packet(0x04, &write_varint(sequence), threshold);
+        let ack = compress_packet(crate::protocol::packet_ids::clientbound::play::ACKNOWLEDGE_PLAYER_DIGGING, &write_varint(sequence), threshold);
         PacketResult::RawResponse(ack)
     }
 
@@ -155,7 +155,7 @@ impl PacketHandler for UseItemOnHandler {
 
         // Send Block Changed Ack to the placing player
         let threshold = ctx.compression_threshold.unwrap_or(256);
-        let ack = compress_packet(0x04, &write_varint(sequence), threshold);
+        let ack = compress_packet(crate::protocol::packet_ids::clientbound::play::ACKNOWLEDGE_PLAYER_DIGGING, &write_varint(sequence), threshold);
         PacketResult::RawResponse(ack)
     }
 

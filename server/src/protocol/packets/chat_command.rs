@@ -1,6 +1,7 @@
 use crate::compression::compress_packet;
 use crate::logging::{LogCategory, LogLevel};
 use crate::protocol::handler::{HandlerContext, PacketHandler, PacketResult};
+use crate::protocol::packet_ids::clientbound::play as cb;
 use crate::protocol::types::read_string;
 use crate::world;
 
@@ -34,7 +35,7 @@ impl PacketHandler for ChatCommandHandler {
             "help" => handle_help(ctx, threshold),
             _ => {
                 let msg = format!("Unknown command: /{}", cmd);
-                let chat = compress_packet(0x77, &world::build_system_chat_payload(&msg), threshold);
+                let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(&msg), threshold);
                 PacketResult::RawResponse(chat)
             }
         }
@@ -50,7 +51,7 @@ fn handle_speed(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketR
         Ok(v) => v,
         Err(_) => {
             let msg = "Usage: /speed <0.0-10.0>";
-            let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+            let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold);
             return PacketResult::RawResponse(chat);
         }
     };
@@ -71,7 +72,7 @@ fn handle_speed(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketR
     // Confirm with chat
     let msg = format!("Flight speed set to {:.1}", clamped);
     ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
-    response.extend_from_slice(&compress_packet(0x77, &world::build_system_chat_payload(&msg), threshold));
+    response.extend_from_slice(&compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(&msg), threshold));
     PacketResult::RawResponse(response)
 }
 
@@ -86,7 +87,7 @@ fn handle_fly(ctx: &mut HandlerContext, threshold: i32) -> PacketResult {
     ));
     let msg = if *ctx.is_flying { "Flying enabled" } else { "Flying disabled" };
     ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
-    response.extend_from_slice(&compress_packet(0x77, &world::build_system_chat_payload(msg), threshold));
+    response.extend_from_slice(&compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold));
     PacketResult::RawResponse(response)
 }
 
@@ -100,7 +101,7 @@ fn handle_time(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketRe
             Ok(t) => t.clamp(0, 24000),
             Err(_) => {
                 let msg = "Usage: /time <day|night|noon|midnight|ticks>";
-                let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+                let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold);
                 return PacketResult::RawResponse(chat);
             }
         },
@@ -114,7 +115,7 @@ fn handle_time(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketRe
     ));
     let msg = format!("Time set to {}", time);
     ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
-    response.extend_from_slice(&compress_packet(0x77, &world::build_system_chat_payload(&msg), threshold));
+    response.extend_from_slice(&compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(&msg), threshold));
     PacketResult::RawResponse(response)
 }
 
@@ -135,7 +136,7 @@ fn teleport_to_coords(x: f64, y: f64, z: f64, ctx: &mut HandlerContext, threshol
     let mut view_pos = Vec::new();
     view_pos.extend_from_slice(&crate::protocol::types::write_varint(chunk_x));
     view_pos.extend_from_slice(&crate::protocol::types::write_varint(chunk_z));
-    response.extend_from_slice(&compress_packet(0x5C, &view_pos, threshold));
+    response.extend_from_slice(&compress_packet(cb::UPDATE_VIEW_POSITION, &view_pos, threshold));
     response.extend_from_slice(&compress_packet(
         0x46,
         &world::build_sync_player_position_at(x, y, z, *ctx.player_yaw, *ctx.player_pitch),
@@ -143,7 +144,7 @@ fn teleport_to_coords(x: f64, y: f64, z: f64, ctx: &mut HandlerContext, threshol
     ));
     let msg = format!("Teleported to {:.1} {:.1} {:.1}", x, y, z);
     ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
-    response.extend_from_slice(&compress_packet(0x77, &world::build_system_chat_payload(&msg), threshold));
+    response.extend_from_slice(&compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(&msg), threshold));
     PacketResult::RawResponse(response)
 }
 
@@ -157,7 +158,7 @@ fn handle_tp(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketResu
             // If it parses as a number, it's not a player name
             if target.parse::<f64>().is_ok() {
                 let msg = "Usage: /tp <player> or /tp <x> <y> <z>";
-                let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+                let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold);
                 return PacketResult::RawResponse(chat);
             }
             // Store for the JS worker to resolve
@@ -170,7 +171,7 @@ fn handle_tp(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketResu
                 Ok(v) => v,
                 Err(_) => {
                     let msg = "Usage: /tp <player> or /tp <x> <y> <z>";
-                    let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+                    let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold);
                     return PacketResult::RawResponse(chat);
                 }
             };
@@ -178,7 +179,7 @@ fn handle_tp(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketResu
                 Ok(v) => v,
                 Err(_) => {
                     let msg = "Usage: /tp <player> or /tp <x> <y> <z>";
-                    let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+                    let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold);
                     return PacketResult::RawResponse(chat);
                 }
             };
@@ -186,7 +187,7 @@ fn handle_tp(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketResu
                 Ok(v) => v,
                 Err(_) => {
                     let msg = "Usage: /tp <player> or /tp <x> <y> <z>";
-                    let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+                    let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold);
                     return PacketResult::RawResponse(chat);
                 }
             };
@@ -194,7 +195,7 @@ fn handle_tp(args: &str, ctx: &mut HandlerContext, threshold: i32) -> PacketResu
         }
         _ => {
             let msg = "Usage: /tp <player> or /tp <x> <y> <z>";
-            let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+            let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold);
             PacketResult::RawResponse(chat)
         }
     }
@@ -208,7 +209,7 @@ fn handle_gamemode(args: &str, ctx: &mut HandlerContext, threshold: i32) -> Pack
         "spectator" | "sp" | "3" => 3,
         _ => {
             let msg = "Usage: /gamemode <survival|creative|adventure|spectator>";
-            let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+            let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold);
             return PacketResult::RawResponse(chat);
         }
     };
@@ -243,7 +244,7 @@ fn handle_gamemode(args: &str, ctx: &mut HandlerContext, threshold: i32) -> Pack
     abilities.push(flags);
     abilities.extend_from_slice(&ctx.fly_speed.to_be_bytes());
     abilities.extend_from_slice(&0.1f32.to_be_bytes()); // walk speed
-    response.extend_from_slice(&compress_packet(0x3E, &abilities, threshold));
+    response.extend_from_slice(&compress_packet(cb::ABILITIES, &abilities, threshold));
 
     // If switching to survival, disable flying
     if !allow_fly && *ctx.is_flying {
@@ -252,7 +253,7 @@ fn handle_gamemode(args: &str, ctx: &mut HandlerContext, threshold: i32) -> Pack
 
     // Send health update for survival
     let health_payload = world::build_set_health_payload(*ctx.health, 20, 5.0);
-    response.extend_from_slice(&compress_packet(0x66, &health_payload, threshold));
+    response.extend_from_slice(&compress_packet(cb::UPDATE_HEALTH, &health_payload, threshold));
 
     let gm_name = match gm {
         0 => "Survival",
@@ -263,13 +264,13 @@ fn handle_gamemode(args: &str, ctx: &mut HandlerContext, threshold: i32) -> Pack
     };
     let msg = format!("Game mode set to {}", gm_name);
     ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
-    response.extend_from_slice(&compress_packet(0x77, &world::build_system_chat_payload(&msg), threshold));
+    response.extend_from_slice(&compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(&msg), threshold));
     PacketResult::RawResponse(response)
 }
 
 fn handle_help(ctx: &mut HandlerContext, threshold: i32) -> PacketResult {
     let msg = "Commands: /speed <0-10>, /fly, /tp <player|x y z>, /time <day|night|noon|midnight|ticks>, /gamemode <survival|creative>, /help";
     ctx.log(LogLevel::Info, LogCategory::Chat, &format!("[Server] {}", msg));
-    let chat = compress_packet(0x77, &world::build_system_chat_payload(msg), threshold);
+    let chat = compress_packet(cb::SYSTEM_CHAT, &world::build_system_chat_payload(msg), threshold);
     PacketResult::RawResponse(chat)
 }

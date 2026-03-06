@@ -335,7 +335,7 @@ pub fn build_all_registry_packets(threshold: i32, config: &ServerConfig) -> Vec<
     ];
 
     for payload in registries {
-        result.extend_from_slice(&compress_packet(0x07, &payload, threshold));
+        result.extend_from_slice(&compress_packet(crate::protocol::packet_ids::clientbound::configuration::REGISTRY_DATA, &payload, threshold));
     }
 
     result

@@ -12,6 +12,7 @@ export type PacketLogCallback = (entries: PacketLogEntry[]) => void;
 export type StatusChangeCallback = (status: "running" | "stopped" | "error", error?: string) => void;
 export type ChunksNeededCallback = (playerId: number, chunks: { cx: number; cz: number }[]) => void;
 export type RoomAssignedCallback = (room: string) => void;
+export type WorldStatusCallback = (loaded: boolean, worldName: string | null) => void;
 
 export class ServerBridge {
   private worker: Worker | null = null;
@@ -22,6 +23,7 @@ export class ServerBridge {
   onStatusChange: StatusChangeCallback | null = null;
   onChunksNeeded: ChunksNeededCallback | null = null;
   onRoomAssigned: RoomAssignedCallback | null = null;
+  onWorldStatus: WorldStatusCallback | null = null;
 
   start(wtUrl: string, wsUrl: string, certHash: string, config: WorkerServerConfig, subdomain: string): void {
     if (this.worker) {
@@ -53,6 +55,9 @@ export class ServerBridge {
           break;
         case "room_assigned":
           this.onRoomAssigned?.(msg.room);
+          break;
+        case "world_status":
+          this.onWorldStatus?.(msg.loaded, msg.worldName);
           break;
       }
     };
@@ -106,6 +111,18 @@ export class ServerBridge {
 
   setPublic(isPublic: boolean): void {
     this.send({ type: "set_public", public: isPublic });
+  }
+
+  loadWorld(worldName: string): void {
+    this.send({ type: "world_load", worldName });
+  }
+
+  unloadWorld(): void {
+    this.send({ type: "world_unload" });
+  }
+
+  saveWorld(): void {
+    this.send({ type: "world_save" });
   }
 
   private send(msg: MainToWorkerMessage): void {

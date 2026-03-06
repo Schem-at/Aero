@@ -12,6 +12,7 @@ import { StatsProvider } from "@/context/StatsContext";
 import { ServerConfigProvider } from "@/context/ServerConfigContext";
 import { PluginProvider } from "@/context/PluginContext";
 import { WorkerProvider } from "@/context/WorkerContext";
+import { WorldProvider } from "@/context/WorldContext";
 import { ServerMiniWidget } from "@/components/ServerMiniWidget";
 import { useServer } from "@/context/ServerContext";
 import { Server, Activity, LogOut, Globe } from "lucide-react";
@@ -34,9 +35,11 @@ export function App() {
           <StatsProvider>
             <ServerConfigProvider>
               <PluginProvider>
-                <WorkerProvider>
-                  <AppInner />
-                </WorkerProvider>
+                <WorldProvider>
+                  <WorkerProvider>
+                    <AppInner />
+                  </WorkerProvider>
+                </WorldProvider>
               </PluginProvider>
             </ServerConfigProvider>
           </StatsProvider>

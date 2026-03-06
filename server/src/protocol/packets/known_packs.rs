@@ -26,18 +26,18 @@ impl PacketHandler for KnownPacksHandler {
         let mut brand_payload = Vec::new();
         brand_payload.extend_from_slice(&write_string("minecraft:brand"));
         brand_payload.extend_from_slice(&write_string("Aero"));
-        response.extend_from_slice(&compress_packet(0x01, &brand_payload, threshold));
+        response.extend_from_slice(&compress_packet(crate::protocol::packet_ids::clientbound::configuration::CUSTOM_PAYLOAD, &brand_payload, threshold));
         ctx.log(LogLevel::Info, LogCategory::Protocol, "Sent server brand: Aero");
 
         // 3. Send Feature Flags (0x0C)
         let mut feature_flags_payload = Vec::new();
         feature_flags_payload.extend_from_slice(&write_varint(1)); // 1 feature flag
         feature_flags_payload.extend_from_slice(&write_string("minecraft:vanilla"));
-        response.extend_from_slice(&compress_packet(0x0C, &feature_flags_payload, threshold));
+        response.extend_from_slice(&compress_packet(crate::protocol::packet_ids::clientbound::configuration::FEATURE_FLAGS, &feature_flags_payload, threshold));
         ctx.log(LogLevel::Info, LogCategory::Protocol, "Sent Feature Flags: minecraft:vanilla");
 
         // 4. Send Finish Configuration (0x03)
-        response.extend_from_slice(&compress_packet(0x03, &[], threshold));
+        response.extend_from_slice(&compress_packet(crate::protocol::packet_ids::clientbound::configuration::FINISH_CONFIGURATION, &[], threshold));
         ctx.log(LogLevel::Info, LogCategory::Protocol, "Sent Finish Configuration");
 
         PacketResult::RawResponse(response)

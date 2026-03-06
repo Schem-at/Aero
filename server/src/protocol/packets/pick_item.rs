@@ -13,7 +13,7 @@ impl PacketHandler for PickItemFromBlockHandler {
         // We respond with Set Held Slot to confirm the current selected slot.
         let threshold = ctx.compression_threshold.unwrap_or(256);
         let slot_payload = [*ctx.held_slot as i8 as u8];
-        PacketResult::RawResponse(compress_packet(0x67, &slot_payload, threshold))
+        PacketResult::RawResponse(compress_packet(crate::protocol::packet_ids::clientbound::play::HELD_ITEM_SLOT, &slot_payload, threshold))
     }
 
     fn name(&self) -> &'static str {
