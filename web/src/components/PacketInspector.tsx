@@ -115,7 +115,10 @@ function PacketRow({
   const defaultTab: DetailTab = hasParsed ? "parsed" : "hex";
   const [tab, setTab] = useState<DetailTab>(defaultTab);
 
-  const resolvedName = entry.packet_name === "Unknown"
+  // Use generated name only for unknown packets and generic response packets.
+  // Handler names are more descriptive than PrismarineJS legacy names.
+  const needsResolution = entry.packet_name === "Unknown" || entry.packet_name.endsWith(" Response");
+  const resolvedName = needsResolution
     ? getPacketName(entry.direction, entry.state, entry.packet_id)
     : undefined;
   const displayName = resolvedName ?? entry.packet_name;

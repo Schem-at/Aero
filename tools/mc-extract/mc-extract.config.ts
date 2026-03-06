@@ -10,5 +10,6 @@ export default {
     tsProtocolMeta: "web/src/lib/generated/protocol-meta.ts",
     rustBlockRegistry: "server/src/block_registry.rs",
     tsPacketNames: "web/src/lib/generated/packet-names.ts",
+    tsPacketSchemas: "web/src/lib/generated/packet-schemas.ts",
   },
 };

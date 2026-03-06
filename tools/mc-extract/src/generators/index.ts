@@ -23,3 +23,4 @@ export { generateWgslBlockConstants } from "./wgsl-block-constants.js";
 export { generateTsProtocolMeta } from "./ts-protocol-meta.js";
 export { generateRustBlockRegistry } from "./rust-block-registry.js";
 export { generateTsPacketNames } from "./ts-packet-names.js";
+export { generateTsPacketSchemas } from "./ts-packet-schemas.js";

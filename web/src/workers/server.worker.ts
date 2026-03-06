@@ -245,6 +245,8 @@ interface ClientSession {
   inPlay: boolean;
   // True when the player is dead (waiting for respawn)
   isDead: boolean;
+  // Number of OPFS-cached hits in the current batch (added to main thread miss count)
+  pendingCacheHits: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -484,6 +486,11 @@ async function loadCachedChunks(session: ClientSession, needed: { cx: number; cz
     misses.push({ cx, cz });
   }
 
+  if (hits.length > 0 || misses.length > 0) {
+    postMsg({ type: "log", level: "debug", category: "system",
+      message: `Chunk batch: ${hits.length} cached, ${misses.length} need generation` });
+  }
+
   enqueueChunkBatchStart(session);
 
   // Send cached hits immediately
@@ -492,6 +499,8 @@ async function loadCachedChunks(session: ClientSession, needed: { cx: number; cz
   }
 
   if (misses.length > 0) {
+    // Track hit count so chunk_batch_done adds them to the total
+    session.pendingCacheHits = hits.length;
     // Request remaining from main thread generator
     postMsg({ type: "chunks_needed", playerId: session.connectionId, chunks: misses });
   } else {
@@ -710,6 +719,7 @@ async function handleStream(stream: StreamHandle): Promise<void> {
     yaw: 0, pitch: 0,
     inPlay: false,
     isDead: false,
+    pendingCacheHits: 0,
   };
 
   sessions.set(connectionId, session);
@@ -1145,6 +1155,7 @@ async function flushDirtyChunks(): Promise<void> {
 
   const toSave = [...dirtyChunks];
   dirtyChunks.clear();
+  let saved = 0;
 
   for (const key of toSave) {
     const chunk = loadedChunks.get(key);
@@ -1154,11 +1165,16 @@ async function flushDirtyChunks(): Promise<void> {
     const cz = parseInt(czStr);
     try {
       await regionStore.writeChunk(cx, cz, chunk, wasmModule);
+      saved++;
     } catch (err) {
       // Re-mark as dirty on failure
       dirtyChunks.add(key);
       postMsg({ type: "log", level: "warn", category: "system", message: `Failed to save chunk ${key}: ${err}` });
     }
+  }
+
+  if (saved > 0) {
+    postMsg({ type: "log", level: "info", category: "system", message: `Auto-saved ${saved} chunks to OPFS` });
   }
 }
 
@@ -1180,10 +1196,10 @@ function stopAutoSave(): void {
 // Stop
 // ---------------------------------------------------------------------------
 
-function handleStop(): void {
+async function handleStop(): Promise<void> {
   stopAutoSave();
-  // Flush dirty chunks synchronously-ish before teardown
-  flushDirtyChunks().catch(() => {});
+  // Flush dirty chunks before teardown
+  try { await flushDirtyChunks(); } catch {}
 
   if (statsInterval) {
     clearInterval(statsInterval);
@@ -1225,7 +1241,7 @@ self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
       await handleStart(msg.wtUrl, msg.wsUrl, msg.config, msg.subdomain);
       break;
     case "stop":
-      handleStop();
+      await handleStop();
       break;
     case "set_config":
       whitelistEnabled = msg.config.whitelist_enabled ?? false;
@@ -1248,19 +1264,22 @@ self.onmessage = async (event: MessageEvent<MainToWorkerMessage>) => {
     case "chunk_data": {
       const session = sessions.get(msg.playerId);
       if (session) {
-        // Store in memory for persistence
+        // msg.blockStates may be transferred (detached), so copy it for persistence
+        const copy = new Uint16Array(msg.blockStates);
         const key = chunkKey(msg.cx, msg.cz);
-        loadedChunks.set(key, msg.blockStates);
+        loadedChunks.set(key, copy);
         dirtyChunks.add(key);
 
-        enqueueChunkData(session, msg.cx, msg.cz, msg.blockStates);
+        enqueueChunkData(session, msg.cx, msg.cz, copy);
       }
       break;
     }
     case "chunk_batch_done": {
       const session = sessions.get(msg.playerId);
       if (session) {
-        enqueueChunkBatchDone(session, msg.count);
+        const totalCount = msg.count + session.pendingCacheHits;
+        session.pendingCacheHits = 0;
+        enqueueChunkBatchDone(session, totalCount);
       }
       break;
     }

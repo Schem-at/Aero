@@ -8,6 +8,7 @@ import {
   generateWgslBlockConstants,
   generateTsProtocolMeta,
   generateTsPacketNames,
+  generateTsPacketSchemas,
 } from "./generators/index";
 import config from "../mc-extract.config";
 import type { Config } from "./types";
@@ -164,6 +165,41 @@ describe("ts-packet-names", () => {
     expect(result.content).toContain('"out:Login:');
     expect(result.content).toContain('"out:Configuration:');
     expect(result.content).toContain('"out:Play:');
+  });
+});
+
+describe("ts-packet-schemas", () => {
+  const result = generateTsPacketSchemas(data, cfg);
+
+  test("generates handshake schema with all fields", () => {
+    expect(result.content).toContain('"in:Handshaking:0x00"');
+    expect(result.content).toContain('"Protocol Version","varint"');
+    expect(result.content).toContain('"Server Host","string"');
+    expect(result.content).toContain('"Server Port","u16"');
+  });
+
+  test("generates login start schema", () => {
+    expect(result.content).toContain('"in:Login:0x00"');
+    expect(result.content).toContain('"Username","string"');
+    expect(result.content).toContain('"Player UUID","UUID"');
+  });
+
+  test("generates play packet schemas", () => {
+    expect(result.content).toContain('"in:Play:0x08"'); // chat_message
+    expect(result.content).toContain('"Message","string"');
+    expect(result.content).toContain('"in:Play:0x28"'); // block_dig
+    expect(result.content).toContain('"Location","position"');
+  });
+
+  test("generates clientbound schemas", () => {
+    expect(result.content).toContain('"out:Play:0x66"'); // update_health
+    expect(result.content).toContain('"Health","f32"');
+    expect(result.content).toContain('"Food","varint"');
+  });
+
+  test("has substantial number of schemas", () => {
+    const count = (result.content.match(/"(in|out):/g) || []).length;
+    expect(count).toBeGreaterThanOrEqual(150);
   });
 });
 

@@ -1,13 +1,12 @@
 import { useState, useCallback } from "react";
 import { useWorld } from "@/context/WorldContext";
+import { useWorker } from "@/context/WorkerContext";
 import { Button } from "@/components/ui/button";
 import { Save, Trash2, FolderOpen, Plus, X } from "lucide-react";
 
 export function WorldPanel() {
-  const {
-    worlds, activeWorld, isLoaded,
-    refreshWorlds, createAndLoadWorld, loadWorld, unloadWorld, saveWorld, removeWorld,
-  } = useWorld();
+  const { worlds, activeWorld, isLoaded, refreshWorlds, doCreateWorld, removeWorld } = useWorld();
+  const { loadWorld, unloadWorld, saveWorld } = useWorker();
 
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -17,17 +16,21 @@ export function WorldPanel() {
     if (!name) return;
     setCreating(true);
     try {
-      await createAndLoadWorld(name, "plugin");
+      await doCreateWorld(name, "plugin");
+      loadWorld(name);
       setNewName("");
     } finally {
       setCreating(false);
     }
-  }, [newName, createAndLoadWorld]);
+  }, [newName, doCreateWorld, loadWorld]);
 
   const handleDelete = useCallback(async (name: string) => {
     if (!confirm(`Delete world "${name}"? This cannot be undone.`)) return;
+    if (activeWorld === name) {
+      unloadWorld();
+    }
     await removeWorld(name);
-  }, [removeWorld]);
+  }, [activeWorld, unloadWorld, removeWorld]);
 
   return (
     <div className="p-4 space-y-4 overflow-y-auto h-full">

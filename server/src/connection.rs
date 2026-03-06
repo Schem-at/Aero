@@ -4,9 +4,36 @@ use crate::logging::{LogCategory, LogLevel, Logger};
 use crate::protocol::handler::PacketRegistry;
 use crate::protocol::packet::frame_packet;
 use crate::protocol::packets::block_events::BlockEvent;
-use crate::protocol::types::{write_string, write_varint};
+use crate::protocol::types::{read_varint, write_string, write_varint};
 use crate::stats::{ConnectionStats, PacketLog, ServerConfig, TickTracker};
 use std::collections::HashMap;
+
+/// Extract the packet ID from pre-framed response bytes.
+/// Handles both uncompressed (frame_packet) and compressed (compress_packet) formats.
+fn extract_response_packet_id(data: &[u8], compression_enabled: bool) -> Option<i32> {
+    if data.len() < 2 { return None; }
+    let (_pkt_len, plen_size) = read_varint(data);
+    let rest = &data[plen_size..];
+    if rest.is_empty() { return None; }
+    if compression_enabled {
+        // Compressed format: VarInt(data_length) + (packet_id + payload) or zlib
+        let (data_length, dlen_size) = read_varint(rest);
+        if data_length == 0 {
+            // Below threshold — uncompressed within compressed frame
+            let inner = &rest[dlen_size..];
+            if inner.is_empty() { return None; }
+            let (pkt_id, _) = read_varint(inner);
+            Some(pkt_id)
+        } else {
+            // Zlib compressed — would need decompression, skip
+            None
+        }
+    } else {
+        // Uncompressed format: VarInt(length) + VarInt(packet_id) + payload
+        let (pkt_id, _) = read_varint(rest);
+        Some(pkt_id)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ConnectionState {
@@ -347,12 +374,14 @@ impl Connection {
             match result {
                 crate::protocol::handler::PacketResult::Response(resp_data) |
                 crate::protocol::handler::PacketResult::RawResponse(resp_data) => {
-                    // Response and RawResponse both contain pre-framed packet bytes
+                    // Extract the actual outbound packet ID from the framed bytes.
+                    let out_packet_id = extract_response_packet_id(&resp_data, self.compression_threshold.is_some())
+                        .unwrap_or(packet_id);
                     let out_size = resp_data.len();
                     self.packet_log.push(PacketLogEntry {
                         direction: "out",
                         state: pre_handler_state.to_string(),
-                        packet_id,
+                        packet_id: out_packet_id,
                         packet_name: format!("{} Response", handler_name),
                         size: out_size,
                         hex_dump: hex_dump(&resp_data, 512),

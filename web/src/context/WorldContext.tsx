@@ -14,31 +14,13 @@ interface WorldContextValue {
   activeWorld: string | null;
   isLoaded: boolean;
   refreshWorlds: () => Promise<void>;
-  createAndLoadWorld: (name: string, generator: string) => Promise<void>;
-  loadWorld: (name: string) => void;
-  unloadWorld: () => void;
-  saveWorld: () => void;
+  doCreateWorld: (name: string, generator: string) => Promise<void>;
   removeWorld: (name: string) => Promise<void>;
-  // Called by WorkerProvider to wire up the bridge
+  /** Called by WorkerProvider when worker reports world status */
   setWorldStatus: (loaded: boolean, worldName: string | null) => void;
 }
 
 const WorldContext = createContext<WorldContextValue | null>(null);
-
-// Store the bridge actions so WorldContext can call them
-let bridgeLoadWorld: ((name: string) => void) | null = null;
-let bridgeUnloadWorld: (() => void) | null = null;
-let bridgeSaveWorld: (() => void) | null = null;
-
-export function setBridgeWorldActions(
-  load: (name: string) => void,
-  unload: () => void,
-  save: () => void,
-) {
-  bridgeLoadWorld = load;
-  bridgeUnloadWorld = unload;
-  bridgeSaveWorld = save;
-}
 
 export function WorldProvider({ children }: { children: ReactNode }) {
   const [worlds, setWorlds] = useState<WorldInfo[]>([]);
@@ -63,29 +45,17 @@ export function WorldProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshWorlds]);
 
-  const createAndLoadWorld = useCallback(async (name: string, generator: string) => {
+  const doCreateWorld = useCallback(async (name: string, generator: string) => {
     await createWorld(name, generator);
     await refreshWorlds();
-    bridgeLoadWorld?.(name);
   }, [refreshWorlds]);
 
-  const loadWorld = useCallback((name: string) => {
-    bridgeLoadWorld?.(name);
-  }, []);
-
-  const unloadWorld = useCallback(() => {
-    bridgeUnloadWorld?.();
-  }, []);
-
-  const saveWorld = useCallback(() => {
-    bridgeSaveWorld?.();
-  }, []);
-
   const removeWorld = useCallback(async (name: string) => {
-    if (activeWorld === name) {
-      bridgeUnloadWorld?.();
-    }
     await deleteWorld(name);
+    if (activeWorld === name) {
+      setActiveWorld(null);
+      setIsLoaded(false);
+    }
     await refreshWorlds();
   }, [activeWorld, refreshWorlds]);
 
@@ -94,14 +64,14 @@ export function WorldProvider({ children }: { children: ReactNode }) {
     setActiveWorld(worldName);
     if (loaded && worldName) {
       updateWorldMeta(worldName, { lastPlayed: Date.now() }).catch(() => {});
+      refreshWorlds();
     }
-  }, []);
+  }, [refreshWorlds]);
 
   return (
     <WorldContext.Provider value={{
       worlds, activeWorld, isLoaded,
-      refreshWorlds, createAndLoadWorld, loadWorld, unloadWorld, saveWorld, removeWorld,
-      setWorldStatus,
+      refreshWorlds, doCreateWorld, removeWorld, setWorldStatus,
     }}>
       {children}
     </WorldContext.Provider>

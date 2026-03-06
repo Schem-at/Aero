@@ -39,6 +39,7 @@ export interface Config {
     tsProtocolMeta: string;
     rustBlockRegistry: string;
     tsPacketNames: string;
+    tsPacketSchemas: string;
   };
 }
 

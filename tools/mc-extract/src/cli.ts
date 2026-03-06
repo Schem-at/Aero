@@ -11,6 +11,7 @@ import {
   generateTsProtocolMeta,
   generateRustBlockRegistry,
   generateTsPacketNames,
+  generateTsPacketSchemas,
 } from "./generators/index.js";
 import type { Generator } from "./generators/index.js";
 
@@ -23,6 +24,7 @@ const GENERATORS: Record<string, Generator> = {
   "protocol-meta": generateTsProtocolMeta,
   "block-registry": generateRustBlockRegistry,
   "packet-names": generateTsPacketNames,
+  "packet-schemas": generateTsPacketSchemas,
 };
 
 function parseArgs() {

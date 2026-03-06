@@ -12,7 +12,7 @@ import { useLogs } from "@/context/LogContext";
 import { useStats } from "@/context/StatsContext";
 import { useServerConfig } from "@/context/ServerConfigContext";
 import { usePlugins } from "@/context/PluginContext";
-import { useWorld, setBridgeWorldActions } from "@/context/WorldContext";
+import { useWorld } from "@/context/WorldContext";
 
 interface WorkerContextValue {
   start: () => void;
@@ -68,13 +68,6 @@ export function WorkerProvider({ children }: { children: ReactNode }) {
     bridge.onWorldStatus = (loaded, worldName) => {
       setWorldStatus(loaded, worldName);
     };
-
-    // Wire up bridge world actions for WorldContext
-    setBridgeWorldActions(
-      (name) => bridge.loadWorld(name),
-      () => bridge.unloadWorld(),
-      () => bridge.saveWorld(),
-    );
     bridge.onChunksNeeded = async (playerId, chunks) => {
       try {
         const gen = generateChunksRef.current;

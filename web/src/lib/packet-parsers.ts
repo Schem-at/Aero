@@ -1,9 +1,11 @@
+import { PACKET_SCHEMAS, type FieldSchema } from "./generated/packet-schemas";
+
 export interface ParsedField {
   name: string;
   value: string | number;
 }
 
-// --- Utility functions ---
+// --- Binary readers ---
 
 export function hexToBytes(hex: string): Uint8Array {
   const clean = hex.replace(/\s+/g, "");
@@ -28,6 +30,20 @@ function readVarInt(data: Uint8Array, offset: number): [number, number] {
   return [value, offset + length];
 }
 
+function readVarLong(data: Uint8Array, offset: number): [bigint, number] {
+  let value = 0n;
+  let length = 0;
+  let byte: number;
+  do {
+    if (offset + length >= data.length) return [value, offset + length];
+    byte = data[offset + length];
+    value |= BigInt(byte & 0x7f) << BigInt(length * 7);
+    length++;
+    if (length > 10) break;
+  } while ((byte & 0x80) !== 0);
+  return [value, offset + length];
+}
+
 function readString(data: Uint8Array, offset: number): [string, number] {
   const [len, afterLen] = readVarInt(data, offset);
   const strBytes = data.slice(afterLen, afterLen + len);
@@ -35,142 +51,211 @@ function readString(data: Uint8Array, offset: number): [string, number] {
   return [str, afterLen + len];
 }
 
-function readUShort(data: Uint8Array, offset: number): [number, number] {
-  return [(data[offset] << 8) | data[offset + 1], offset + 2];
+function ensureView(data: Uint8Array, offset: number, size: number): DataView | null {
+  if (offset + size > data.length) return null;
+  return new DataView(data.buffer, data.byteOffset + offset, size);
 }
 
-function readLong(data: Uint8Array, offset: number): [bigint, number] {
-  const view = new DataView(data.buffer, data.byteOffset + offset, 8);
-  return [view.getBigInt64(0), offset + 8];
+// --- Schema-driven parser ---
+
+function readField(
+  data: Uint8Array,
+  offset: number,
+  type: string,
+): [string | number, number] | null {
+  if (offset >= data.length) return null;
+
+  // Primitives
+  switch (type) {
+    case "varint": {
+      const [v, o] = readVarInt(data, offset);
+      return [v, o];
+    }
+    case "optvarint": {
+      const [v, o] = readVarInt(data, offset);
+      return [v === 0 ? "absent" : v - 1, o];
+    }
+    case "varlong": {
+      const [v, o] = readVarLong(data, offset);
+      return [v.toString(), o];
+    }
+    case "bool": {
+      return [data[offset] ? "true" : "false", offset + 1];
+    }
+    case "i8": {
+      const v = (data[offset] << 24) >> 24; // sign extend
+      return [v, offset + 1];
+    }
+    case "u8": {
+      return [data[offset], offset + 1];
+    }
+    case "i16": {
+      const view = ensureView(data, offset, 2);
+      if (!view) return null;
+      return [view.getInt16(0), offset + 2];
+    }
+    case "u16": {
+      const view = ensureView(data, offset, 2);
+      if (!view) return null;
+      return [view.getUint16(0), offset + 2];
+    }
+    case "i32": {
+      const view = ensureView(data, offset, 4);
+      if (!view) return null;
+      return [view.getInt32(0), offset + 4];
+    }
+    case "u32": {
+      const view = ensureView(data, offset, 4);
+      if (!view) return null;
+      return [view.getUint32(0), offset + 4];
+    }
+    case "f32": {
+      const view = ensureView(data, offset, 4);
+      if (!view) return null;
+      return [view.getFloat32(0).toFixed(4), offset + 4];
+    }
+    case "i64": {
+      const view = ensureView(data, offset, 8);
+      if (!view) return null;
+      return [view.getBigInt64(0).toString(), offset + 8];
+    }
+    case "u64": {
+      const view = ensureView(data, offset, 8);
+      if (!view) return null;
+      return [view.getBigUint64(0).toString(), offset + 8];
+    }
+    case "f64": {
+      const view = ensureView(data, offset, 8);
+      if (!view) return null;
+      return [view.getFloat64(0).toFixed(4), offset + 8];
+    }
+    case "string": {
+      const [s, o] = readString(data, offset);
+      return [s, o];
+    }
+    case "UUID": {
+      if (offset + 16 > data.length) return null;
+      const hex = Array.from(data.slice(offset, offset + 16))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+      return [uuid, offset + 16];
+    }
+    case "position": {
+      const view = ensureView(data, offset, 8);
+      if (!view) return null;
+      const val = view.getBigInt64(0);
+      let x = Number(val >> 38n);
+      let z = Number((val >> 12n) & 0x3FFFFFFn);
+      let y = Number(val & 0xFFFn);
+      if (x >= (1 << 25)) x -= 1 << 26;
+      if (z >= (1 << 25)) z -= 1 << 26;
+      if (y >= (1 << 11)) y -= 1 << 12;
+      return [`${x}, ${y}, ${z}`, offset + 8];
+    }
+  }
+
+  // Buffer types: buffer:varint or buffer:N
+  if (type.startsWith("buffer:")) {
+    const countPart = type.slice(7);
+    let count: number;
+    let newOff = offset;
+    if (countPart === "varint") {
+      [count, newOff] = readVarInt(data, offset);
+    } else {
+      count = parseInt(countPart, 10);
+    }
+    if (newOff + count > data.length) return null;
+    return [`${count} bytes`, newOff + count];
+  }
+
+  // Option types: option:TYPE
+  if (type.startsWith("option:")) {
+    if (offset >= data.length) return null;
+    const present = data[offset];
+    if (!present) return ["absent", offset + 1];
+    const inner = type.slice(7);
+    const result = readField(data, offset + 1, inner);
+    if (!result) return ["present", offset + 1];
+    return result;
+  }
+
+  // Mapper types: map:TYPE:k1=v1,k2=v2,...
+  if (type.startsWith("map:")) {
+    const parts = type.split(":");
+    const innerType = parts[1];
+    const mappingStr = parts.slice(2).join(":");
+    const result = readField(data, offset, innerType);
+    if (!result) return null;
+    const [rawVal, newOff] = result;
+    const mappings = Object.fromEntries(
+      mappingStr.split(",").map((p) => p.split("="))
+    );
+    const mapped = mappings[String(rawVal)];
+    return [mapped ? `${mapped} (${rawVal})` : rawVal, newOff];
+  }
+
+  // Bitflags: flags:TYPE:name1,name2,...
+  if (type.startsWith("flags:")) {
+    const parts = type.split(":");
+    const innerType = parts[1];
+    const flagNames = parts[2].split(",");
+    const result = readField(data, offset, innerType);
+    if (!result) return null;
+    const [rawVal, newOff] = result;
+    const val = typeof rawVal === "number" ? rawVal : parseInt(String(rawVal), 10);
+    const active = flagNames.filter((_, i) => val & (1 << i));
+    return [active.length > 0 ? active.join(", ") : "none", newOff];
+  }
+
+  // Array: array:countType:innerType
+  if (type.startsWith("array:")) {
+    const parts = type.split(":");
+    const innerType = parts[2];
+    const [count, afterCount] = readVarInt(data, offset);
+    if (count > 100) return [`[${count} items]`, afterCount]; // don't parse huge arrays
+    const items: string[] = [];
+    let off = afterCount;
+    for (let i = 0; i < count; i++) {
+      const result = readField(data, off, innerType);
+      if (!result) break;
+      items.push(String(result[0]));
+      off = result[1];
+    }
+    return [items.length <= 5 ? items.join(", ") : `[${items.length} items]`, off];
+  }
+
+  return null;
 }
 
-function readFloat(data: Uint8Array, offset: number): [number, number] {
-  const view = new DataView(data.buffer, data.byteOffset + offset, 4);
-  return [view.getFloat32(0), offset + 4];
+function parseWithSchema(schema: FieldSchema[], data: Uint8Array): ParsedField[] {
+  const fields: ParsedField[] = [];
+  let offset = 0;
+  for (const [name, type] of schema) {
+    const result = readField(data, offset, type);
+    if (!result) break;
+    const [value, newOffset] = result;
+    fields.push({ name, value });
+    offset = newOffset;
+  }
+  return fields;
 }
 
-// --- Parser registry ---
+// --- Manual overrides for packets needing special display logic ---
 
 type Parser = (payload: Uint8Array) => ParsedField[];
-
-const parsers = new Map<string, Parser>();
-
-// Handshake (Handshaking C→S 0x00)
-parsers.set("Handshaking:in:0x00", (data) => {
-  const fields: ParsedField[] = [];
-  let off = 0;
-  let val: number;
-  [val, off] = readVarInt(data, off);
-  fields.push({ name: "Protocol Version", value: val });
-  let str: string;
-  [str, off] = readString(data, off);
-  fields.push({ name: "Server Address", value: str });
-  let port: number;
-  [port, off] = readUShort(data, off);
-  fields.push({ name: "Port", value: port });
-  [val, off] = readVarInt(data, off);
-  fields.push({ name: "Next State", value: val === 1 ? "Status (1)" : val === 2 ? "Login (2)" : `${val}` });
-  return fields;
-});
-
-// Confirm Teleportation (Play C→S 0x00)
-parsers.set("Play:in:0x00", (data) => {
-  const [val] = readVarInt(data, 0);
-  return [{ name: "Teleport ID", value: val }];
-});
-
-// Client Information (Configuration C→S 0x00)
-parsers.set("Configuration:in:0x00", (data) => {
-  const fields: ParsedField[] = [];
-  let off = 0;
-  let str: string;
-  [str, off] = readString(data, off);
-  fields.push({ name: "Locale", value: str });
-  fields.push({ name: "View Distance", value: data[off] });
-  off++;
-  let chatMode: number;
-  [chatMode, off] = readVarInt(data, off);
-  const chatModes = ["Enabled", "Commands Only", "Hidden"];
-  fields.push({ name: "Chat Mode", value: chatModes[chatMode] ?? `${chatMode}` });
-  fields.push({ name: "Chat Colors", value: data[off] ? "Yes" : "No" });
-  off++;
-  // Displayed skin parts (bitmask)
-  fields.push({ name: "Skin Parts", value: `0x${data[off]?.toString(16).padStart(2, "0")}` });
-  off++;
-  let mainHand: number;
-  [mainHand, off] = readVarInt(data, off);
-  fields.push({ name: "Main Hand", value: mainHand === 0 ? "Left" : "Right" });
-  fields.push({ name: "Text Filtering", value: data[off] ? "Yes" : "No" });
-  off++;
-  fields.push({ name: "Allow Server Listings", value: data[off] ? "Yes" : "No" });
-  return fields;
-});
-
-// Chunk Batch Received (Play C→S 0x0A)
-parsers.set("Play:in:0x0a", (data) => {
-  const view = new DataView(data.buffer, data.byteOffset, Math.min(4, data.length));
-  const chunksPerTick = data.length >= 4 ? view.getFloat32(0) : 0;
-  return [{ name: "Chunks Per Tick", value: chunksPerTick.toFixed(2) }];
-});
-
-// Keep Alive (Play C→S 0x1B)
-parsers.set("Play:in:0x1b", (data) => {
-  if (data.length < 8) return [{ name: "Keep Alive ID", value: "(truncated)" }];
-  const [val] = readLong(data, 0);
-  return [{ name: "Keep Alive ID", value: val.toString() }];
-});
-
-// Set Player Position (Play C→S 0x1D)
-parsers.set("Play:in:0x1d", (data) => {
-  if (data.length < 25) return [];
-  const view = new DataView(data.buffer, data.byteOffset, data.length);
-  return [
-    { name: "X", value: view.getFloat64(0).toFixed(4) },
-    { name: "Y (Feet)", value: view.getFloat64(8).toFixed(4) },
-    { name: "Z", value: view.getFloat64(16).toFixed(4) },
-    { name: "On Ground", value: data[24] ? "Yes" : "No" },
-  ];
-});
-
-// Set Player Position and Rotation (Play C→S 0x1E)
-parsers.set("Play:in:0x1e", (data) => {
-  if (data.length < 33) return [];
-  const view = new DataView(data.buffer, data.byteOffset, data.length);
-  return [
-    { name: "X", value: view.getFloat64(0).toFixed(4) },
-    { name: "Y (Feet)", value: view.getFloat64(8).toFixed(4) },
-    { name: "Z", value: view.getFloat64(16).toFixed(4) },
-    { name: "Yaw", value: view.getFloat32(24).toFixed(2) },
-    { name: "Pitch", value: view.getFloat32(28).toFixed(2) },
-    { name: "On Ground", value: data[32] ? "Yes" : "No" },
-  ];
-});
-
-// Set Player Rotation (Play C→S 0x1F)
-parsers.set("Play:in:0x1f", (data) => {
-  if (data.length < 9) return [];
-  const view = new DataView(data.buffer, data.byteOffset, data.length);
-  return [
-    { name: "Yaw", value: view.getFloat32(0).toFixed(2) },
-    { name: "Pitch", value: view.getFloat32(4).toFixed(2) },
-    { name: "On Ground", value: data[8] ? "Yes" : "No" },
-  ];
-});
-
-// --- Outbound parsers (raw_payload includes frame: VarInt length + VarInt packetId + payload) ---
+const overrides = new Map<string, Parser>();
 
 /** Skip the frame header (packet length VarInt + packet ID VarInt) to get the payload */
 function skipFrame(data: Uint8Array): Uint8Array {
   let off = 0;
-  // Skip packet length VarInt
   [, off] = readVarInt(data, off);
-  // Skip packet ID VarInt
   [, off] = readVarInt(data, off);
   return data.slice(off);
 }
 
-// Status Response (Status S→C 0x00) — contains JSON string
-parsers.set("Status:out:0x00", (data) => {
+// Status Response (Status S→C 0x00) — parse JSON for display
+overrides.set("out:Status:0x00", (data) => {
   const payload = skipFrame(data);
   const [json] = readString(payload, 0);
   try {
@@ -193,21 +278,6 @@ parsers.set("Status:out:0x00", (data) => {
   }
 });
 
-// Pong Response (Status S→C 0x01)
-parsers.set("Status:out:0x01", (data) => {
-  const payload = skipFrame(data);
-  if (payload.length < 8) return [{ name: "Payload", value: "(truncated)" }];
-  const view = new DataView(payload.buffer, payload.byteOffset, 8);
-  return [{ name: "Pong Value", value: view.getBigInt64(0).toString() }];
-});
-
-// Ping Request (Status C→S 0x01)
-parsers.set("Status:in:0x01", (data) => {
-  if (data.length < 8) return [{ name: "Payload", value: "(truncated)" }];
-  const view = new DataView(data.buffer, data.byteOffset, 8);
-  return [{ name: "Ping Value", value: view.getBigInt64(0).toString() }];
-});
-
 // --- Public API ---
 
 export function parsePacketFields(
@@ -216,12 +286,25 @@ export function parsePacketFields(
   packetId: number,
   rawPayloadHex: string
 ): ParsedField[] | null {
-  const key = `${state}:${direction}:0x${packetId.toString(16).padStart(2, "0")}`;
-  const parser = parsers.get(key);
-  if (!parser) return null;
+  if (!rawPayloadHex) return null;
+
+  const key = `${direction}:${state}:0x${packetId.toString(16).padStart(2, "0")}`;
+
   try {
     const bytes = hexToBytes(rawPayloadHex);
-    return parser(bytes);
+
+    // Check manual overrides first
+    const override = overrides.get(key);
+    if (override) return override(bytes);
+
+    // Use generated schema
+    const schema = PACKET_SCHEMAS[key];
+    if (schema) {
+      const fields = parseWithSchema(schema, bytes);
+      return fields.length > 0 ? fields : null;
+    }
+
+    return null;
   } catch {
     return null;
   }
